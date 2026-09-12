@@ -1,0 +1,14 @@
+# 容器内执行的脚本必须是 LF，否则 Linux 下会报 "bad interpreter"。
+* text=auto eol=lf
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.html text eol=lf
+*.js   text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+
+# 二进制/补丁不做换行转换
+*.patch -text
+*.png -text
+*.ico -text
