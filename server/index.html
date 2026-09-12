@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>USB/IP 设备共享</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f7fb;
+      --card: #fff;
+      --text: #182230;
+      --muted: #667085;
+      --line: #e4e9f0;
+      --brand: #1769e0;
+      --brand-dark: #0d4eaf;
+      --green: #087443;
+      --green-bg: #e7f7ef;
+      --gray-bg: #f0f2f5;
+      --red: #b42318;
+      --red-bg: #fff0ee;
+      --shadow: 0 10px 30px rgba(28, 45, 75, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 28px 18px 48px; }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #1a7bf2, #1251b8); font-size: 13px; font-weight: 700; box-shadow: 0 6px 14px rgba(23, 105, 224, .24); }
+    h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
+    .subtitle { margin: 3px 0 0; color: var(--muted); }
+    .card { background: var(--card); border: 1px solid rgba(228, 233, 240, .9); border-radius: 14px; box-shadow: var(--shadow); }
+    .notice { padding: 15px 18px; margin-bottom: 18px; display: flex; gap: 12px; align-items: flex-start; }
+    .notice strong { display: block; margin-bottom: 3px; }
+    .notice p { color: var(--muted); margin: 0; }
+    .notice.warn { border-left: 4px solid #f79009; }
+    .toolbar { padding: 15px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+    .toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .count { color: var(--muted); }
+    .port { color: var(--muted); }
+    button { border: 0; border-radius: 8px; padding: 8px 13px; cursor: pointer; font: inherit; transition: .15s ease; white-space: nowrap; }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { cursor: wait; opacity: .6; transform: none; }
+    .primary { background: var(--brand); color: #fff; }
+    .primary:hover { background: var(--brand-dark); }
+    .secondary { background: #edf3ff; color: var(--brand-dark); }
+    .danger { background: var(--red-bg); color: var(--red); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 1250px; }
+    th, td { padding: 13px 15px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 600; background: #fbfcfe; font-size: 13px; }
+    tr:last-child td { border-bottom: 0; }
+    .device-name { font-weight: 600; max-width: 260px; word-break: break-word; }
+    .device-sub { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+    .remark { color: #475467; max-width: 220px; white-space: pre-wrap; word-break: break-word; }
+    .muted { color: var(--muted); }
+    code { background: #f0f3f7; padding: 2px 6px; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 4px 9px; font-size: 12px; white-space: nowrap; }
+    .badge.shared { color: var(--green); background: var(--green-bg); }
+    .badge.free { color: var(--muted); background: var(--gray-bg); }
+    .bind { display: inline-block; border-radius: 6px; padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+    .bind-serial { color: #087443; background: #e7f7ef; }
+    .bind-model { color: #0d4eaf; background: #edf3ff; }
+    .bind-group { color: #b54708; background: #fff4e5; }
+    .bind-legacy, .bind-none { color: var(--muted); background: var(--gray-bg); }
+    .warn-text { color: #b54708; }
+    .owner { max-width: 210px; word-break: break-word; }
+    .owner strong { display: block; }
+    .owner small { color: var(--muted); }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .empty, .error { padding: 42px 18px; text-align: center; color: var(--muted); }
+    .error { color: var(--red); }
+    .bottom { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: rgba(15, 23, 42, .45); }
+    .modal[hidden] { display: none; }
+    .center-card { width: min(430px, 100%); padding: 26px; text-align: center; }
+    .center-card h2 { margin: 0 0 8px; font-size: 21px; }
+    .center-card p { color: var(--muted); margin: 0 0 18px; }
+    .field { margin-bottom: 14px; text-align: left; }
+    .field label { display: block; color: var(--muted); margin-bottom: 6px; }
+    .field input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font: inherit; }
+    .editor { width: min(600px, 100%); padding: 22px; }
+    .editor h2 { margin: 0 0 16px; font-size: 19px; }
+    .editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    @media (max-width: 650px) {
+      .top { align-items: flex-start; flex-direction: column; }
+      h1 { font-size: 21px; }
+      .toolbar { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap" id="mainApp" hidden>
+    <header class="top">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">USB/IP</div>
+        <div>
+          <h1>USB/IP 设备共享</h1>
+          <p class="subtitle">USB/IP 服务端管理</p>
+        </div>
+      </div>
+      <div>
+        <button class="secondary" id="changePassBtn">修改密码</button>
+        <button class="secondary" id="logoutBtn">退出登录</button>
+        <button class="primary" id="refreshTop">刷新设备</button>
+      </div>
+    </header>
+
+    <section class="card notice warn">
+      <div>⚠️</div>
+      <div>
+        <strong>只在可信内网使用</strong>
+        <p>USB/IP 默认没有加密和账号认证。请在防火墙中限制访问来源，不要把服务端口暴露到公网。</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <strong>本机 USB 设备</strong>
+          <span class="count" id="count">正在读取…</span>
+          <span class="port">USB/IP 服务端口：<code id="port">5555</code></span>
+        </div>
+        <span id="updated" class="count"></span>
+      </div>
+      <div id="content" class="table-wrap">
+        <div class="empty">正在读取 USB 设备…</div>
+      </div>
+    </section>
+
+    <p class="bottom">设备名称和备注保存在 NAS 配置目录；连接方来自 Windows 中文客户端的在线登记。客户端停止心跳超过约 45 秒后会自动消失。管理员可用“强制断开连接”从服务器踢掉当前远程客户端；设备仍保持共享。</p>
+  </main>
+
+  <div class="modal" id="loginModal" hidden>
+    <section class="card center-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+      <h2 id="loginTitle">USB/IP 设备共享</h2>
+      <p>请输入管理密码登录</p>
+      <div class="field">
+        <label for="loginPass">管理密码</label>
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="默认 123456">
+      </div>
+      <button class="primary" id="loginBtn" style="width:100%">登录</button>
+      <p class="muted" style="margin-top:14px;font-size:12px">首次登录后必须修改默认密码</p>
+    </section>
+  </div>
+
+  <div class="modal" id="changeModal" hidden>
+    <section class="card center-card" role="dialog" aria-modal="true" aria-labelledby="changeTitle">
+      <h2 id="changeTitle">修改管理密码</h2>
+      <p id="changeHint">出于安全要求，请先修改默认密码后再使用。</p>
+      <div class="field">
+        <label for="oldPass">当前密码</label>
+        <input id="oldPass" type="password" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label for="newPass">新密码（至少 6 位）</label>
+        <input id="newPass" type="password" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label for="newPass2">确认新密码</label>
+        <input id="newPass2" type="password" autocomplete="new-password">
+      </div>
+      <button class="primary" id="changeBtn" style="width:100%">保存新密码</button>
+    </section>
+  </div>
+
+  <div class="modal" id="editorModal" hidden>
+    <section class="card editor" role="dialog" aria-modal="true" aria-labelledby="editorTitle">
+      <h2 id="editorTitle">编辑设备名称和备注</h2>
+      <div class="field">
+        <label for="aliasInput">显示名称（可选）</label>
+        <input id="aliasInput" maxlength="80" placeholder="例如：财务加密狗、张三专用">
+      </div>
+      <div class="field">
+        <label for="remarkInput">设备备注（可选）</label>
+        <textarea id="remarkInput" maxlength="500" style="width:100%;min-height:100px;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit;resize:vertical" placeholder="例如：连接财务电脑使用，不要拔出"></textarea>
+      </div>
+      <div class="editor-actions">
+        <button class="secondary" id="cancelEdit">取消</button>
+        <button class="primary" id="saveEdit">保存</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const TOKEN_KEY = 'usbip-share-token';
+    // 项目改名前的旧键名，仅用于一次性迁移；迁移完即删除。
+    const LEGACY_TOKEN_KEY = 'fnos-usbip-token';
+    let token = localStorage.getItem(TOKEN_KEY) || localStorage.getItem(LEGACY_TOKEN_KEY) || '';
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    let mustChange = false;
+
+    const mainApp = document.getElementById('mainApp');
+    const loginModal = document.getElementById('loginModal');
+    const changeModal = document.getElementById('changeModal');
+    const editorModal = document.getElementById('editorModal');
+    const aliasInput = document.getElementById('aliasInput');
+    const remarkInput = document.getElementById('remarkInput');
+    let editingBusId = '';
+
+    document.getElementById('loginBtn').onclick = doLogin;
+    document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+    document.getElementById('changeBtn').onclick = doChange;
+    document.getElementById('changePassBtn').onclick = () => showChange();
+    document.getElementById('logoutBtn').onclick = () => {
+      token = ''; localStorage.removeItem(TOKEN_KEY);
+      window.location.reload();
+    };
+    document.getElementById('refreshTop').onclick = loadDevices;
+    document.getElementById('cancelEdit').onclick = () => { editorModal.hidden = true; };
+    editorModal.onclick = e => { if (e.target === editorModal) editorModal.hidden = true; };
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { editorModal.hidden = true; } });
+    document.getElementById('saveEdit').onclick = saveMetadata;
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    }
+    function flash(message) {
+      document.getElementById('updated').textContent = message;
+      setTimeout(() => { document.getElementById('updated').textContent = ''; }, 2600);
+    }
+    function apiHeaders() {
+      const headers = {'Accept': 'application/json'};
+      if (token) headers['X-Admin-Token'] = token;
+      return headers;
+    }
+    function jsonHeaders() {
+      return Object.assign({'Content-Type': 'application/json'}, apiHeaders());
+    }
+    function showLogin() {
+      mainApp.hidden = true;
+      loginModal.hidden = false;
+      document.getElementById('loginPass').focus();
+    }
+    function showChange(force) {
+      changeModal.hidden = false;
+      if (force) document.getElementById('changeHint').textContent = '出于安全要求，请先修改默认密码后再使用。';
+      else document.getElementById('changeHint').textContent = '修改后需要重新登录。';
+      document.getElementById('oldPass').focus();
+    }
+    async function doLogin() {
+      const password = document.getElementById('loginPass').value;
+      const button = document.getElementById('loginBtn');
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({password})});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || '登录失败');
+        token = data.token;
+        mustChange = Boolean(data.mustChange);
+        localStorage.setItem(TOKEN_KEY, token);
+        loginModal.hidden = true;
+        mainApp.hidden = false;
+        document.getElementById('loginPass').value = '';
+        if (mustChange) showChange(true);
+        await loadDevices();
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+    async function doChange() {
+      const oldPassword = document.getElementById('oldPass').value;
+      const newPassword = document.getElementById('newPass').value;
+      const newPassword2 = document.getElementById('newPass2').value;
+      if (newPassword !== newPassword2) { alert('两次输入的新密码不一致'); return; }
+      if (newPassword.length < 6) { alert('新密码至少 6 个字符'); return; }
+      const button = document.getElementById('changeBtn');
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/change-password', {method: 'POST', headers: jsonHeaders(), body: JSON.stringify({oldPassword, newPassword})});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || '修改失败');
+        mustChange = false;
+        changeModal.hidden = true;
+        document.getElementById('oldPass').value = '';
+        document.getElementById('newPass').value = '';
+        document.getElementById('newPass2').value = '';
+        flash('密码已修改，下次登录请使用新密码');
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+    async function loadDevices() {
+      if (!token) { showLogin(); return; }
+      const content = document.getElementById('content');
+      content.innerHTML = '<div class="empty">正在读取 USB 设备…</div>';
+      try {
+        const response = await fetch('/api/devices', {cache: 'no-store', headers: apiHeaders()});
+        if (response.status === 401) { showLogin(); return; }
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || '读取设备失败');
+        document.getElementById('port').textContent = data.usbipPort;
+        document.getElementById('count').textContent = `共 ${data.devices.length} 个`;
+        renderDevices(data.devices);
+        document.getElementById('updated').textContent = '刚刚更新';
+      } catch (error) {
+        document.getElementById('count').textContent = '';
+        content.innerHTML = `<div class="error">${escapeHtml(error.message)}<br><br><button class="secondary" onclick="loadDevices()">重试</button></div>`;
+      }
+    }
+    function connectionSummary(connections) {
+      if (!connections || !connections.length) return '<span class="muted">未登记连接方</span>';
+      return connections.map(connection => {
+        const name = escapeHtml(connection.name || '未命名客户端');
+        const address = escapeHtml(connection.address || '地址未知');
+        return `<div class="owner"><strong>${name}</strong><small>${address}</small></div>`;
+      }).join('');
+    }
+    function renderDevices(devices) {
+      const content = document.getElementById('content');
+      if (!devices.length) {
+        content.innerHTML = '<div class="empty">没有发现 USB 设备。请确认设备已插入，并检查容器的 USB 映射。</div>';
+        return;
+      }
+      const rows = devices.map(device => {
+        const shared = Boolean(device.shared);
+        const kick = shared
+          ? `<button class="danger" data-action="kick" data-busid="${escapeHtml(device.busid)}">强制断开连接</button>`
+          : '';
+        const action = shared
+          ? `<button class="danger" data-action="unshare" data-busid="${escapeHtml(device.busid)}">停止共享</button>${kick}`
+          : `<button class="primary" data-action="share" data-busid="${escapeHtml(device.busid)}">开始共享</button>`;
+        const alias = device.alias ? `<div class="device-name">${escapeHtml(device.alias)}</div><div class="device-sub">系统名称：${escapeHtml(device.description || '未知')}</div>`
+          : `<div class="device-name">${escapeHtml(device.description || '未知 USB 设备')}</div>`;
+        // 文案由服务端给出（含真实序号），这里只负责配色；未知取值回退到“未设置”。
+        const bindStyles = {
+          serial: 'bind-serial', model: 'bind-model', group: 'bind-group',
+          legacy: 'bind-legacy', none: 'bind-none'
+        };
+        const bindStyle = bindStyles[device.binding] || 'bind-none';
+        const bindText = device.bindingLabel || '未设置';
+        const bindBadge = `<span class="bind ${bindStyle}" title="名称/备注的识别依据">${escapeHtml(bindText)}</span>`;
+        const dupHint = device.duplicateModel
+          ? '<div class="device-sub warn-text">同型号多台且无序列号，无法区分个体</div>'
+          : '';
+        return `<tr>
+          <td>${alias}<div class="device-sub">VID/PID：${escapeHtml(device.vidpid)}</div>${dupHint}</td>
+          <td class="remark">${device.remark ? escapeHtml(device.remark) : '<span class="muted">未设置</span>'}</td>
+          <td><code>${escapeHtml(device.busid)}</code></td>
+          <td>${bindBadge}</td>
+          <td>${connectionSummary(device.connections)}</td>
+          <td><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span></td>
+          <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${escapeHtml(device.busid)}">编辑名称/备注</button>${action}</div></td>
+        </tr>`;
+      }).join('');
+      content.innerHTML = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>连接方</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      content.querySelectorAll('button[data-action]').forEach(button => {
+        button.onclick = () => {
+          if (button.dataset.action === 'edit') openEditor(button.dataset.busid, devices);
+          else changeState(button.dataset.busid, button.dataset.action, button);
+        };
+      });
+    }
+    function openEditor(busid, devices) {
+      const device = devices.find(item => item.busid === busid);
+      if (!device) return;
+      editingBusId = busid;
+      aliasInput.value = device.alias || '';
+      remarkInput.value = device.remark || '';
+      editorModal.hidden = false;
+      aliasInput.focus();
+    }
+    async function saveMetadata() {
+      if (!editingBusId) return;
+      const saveButton = document.getElementById('saveEdit');
+      saveButton.disabled = true;
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(editingBusId)}/metadata`, {
+          method: 'POST', headers: jsonHeaders(),
+          body: JSON.stringify({alias: aliasInput.value, remark: remarkInput.value})
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || data.message || '保存失败');
+        editorModal.hidden = true;
+        flash('设备名称和备注已保存');
+        await loadDevices();
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        saveButton.disabled = false;
+      }
+    }
+    async function changeState(busid, action, button) {
+      if (action === 'kick' && !window.confirm('确定要从服务器强制断开此设备的远程客户端吗？设备会继续保持共享，设置了自动重连的客户端可能再次连接。')) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(busid)}/${action}`, {
+          method: 'POST', headers: apiHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || data.message || '操作失败');
+        flash(data.message || '操作成功');
+        await loadDevices();
+      } catch (error) {
+        button.disabled = false;
+        alert(error.message);
+      }
+    }
+    async function bootstrap() {
+      // 登录框只在“登录成功”时被隐藏的旧逻辑，会让带着有效登录态的刷新一直
+      // 把密码框挂在屏幕上。这里改为先问服务端这个令牌是否仍然有效，再决定
+      // 显示设备列表还是登录框。
+      if (!token) { showLogin(); return; }
+      let data = null;
+      try {
+        const response = await fetch('/api/session', {cache: 'no-store', headers: apiHeaders()});
+        data = await response.json();
+        if (!response.ok || !data.ok || !data.authorized) data = null;
+      } catch (error) {
+        data = null;
+      }
+      if (!data) {
+        // 令牌过期或被改密码废止：清掉本地令牌，让用户重新登录。
+        token = '';
+        localStorage.removeItem(TOKEN_KEY);
+        showLogin();
+        return;
+      }
+      mustChange = Boolean(data.mustChange);
+      loginModal.hidden = true;
+      mainApp.hidden = false;
+      if (mustChange) showChange(true);
+      await loadDevices();
+    }
+    bootstrap().catch(() => showLogin());
+    setInterval(() => { if (!loginModal.hidden) return; if (!changeModal.hidden && mustChange) return; loadDevices(); }, 10000);
+  </script>
+</body>
+</html>

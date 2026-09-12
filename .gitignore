@@ -1,0 +1,24 @@
+# 运行时数据：包含管理密码与设备名称/备注，绝对不要提交
+server/config/*
+!server/config/README.txt
+.env
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 构建产物与日志
+bin/
+*.exe
+*.sys
+*.pdb
+*.obj
+*.log
+_workspace/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

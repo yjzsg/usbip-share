@@ -1,0 +1,56 @@
+# The project name and container name are pinned so neither depends on the
+# directory this repository happens to be checked out into.
+name: usbip-share-server
+
+services:
+  usbip-server:
+    container_name: usbip-share-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local/usbip-share-server:2.1
+    restart: unless-stopped
+
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      USBIP_PORT: ${USBIP_PORT:-5555}
+      # Optional initial list; devices can also be shared from the Chinese UI.
+      # Example: 1-1 or 1-1,1-2.3.
+      USBIP_BUSIDS: ${USBIP_BUSIDS:-}
+      USBIP_LOAD_MODULE: ${USBIP_LOAD_MODULE:-true}
+      USBIP_UNBIND_ON_EXIT: ${USBIP_UNBIND_ON_EXIT:-false}
+      USBIPD_DEBUG: ${USBIPD_DEBUG:-false}
+      USBIP_WEB_ENABLED: ${USBIP_WEB_ENABLED:-true}
+      USBIP_WEB_HOST: ${USBIP_WEB_HOST:-0.0.0.0}
+      USBIP_WEB_PORT: ${USBIP_WEB_PORT:-8080}
+      # Set a non-empty token before exposing the management UI beyond localhost.
+      USBIP_WEB_TOKEN: ${USBIP_WEB_TOKEN:-}
+      USBIP_METADATA_FILE: ${USBIP_METADATA_FILE:-/etc/usbip/device-metadata.json}
+      USBIP_CLIENTS_FILE: ${USBIP_CLIENTS_FILE:-/run/usbip/clients.json}
+      # Release a shared device when its client stops heartbeating this long.
+      # Default 60s; our Chinese client heartbeats every 10s.
+      USBIP_KICK_IDLE_SECONDS: ${USBIP_KICK_IDLE_SECONDS:-60}
+
+    ports:
+      # Phase B(单端口):对外只开一个端口,USB/IP 与 管理接口/网页 共用。
+      - "${USBIP_HOST_BIND:-0.0.0.0}:${USBIP_HOST_PORT:-5555}:${USBIP_PORT:-5555}/tcp"
+      # 旧版需要单独的管理端口;新版本已不需要。若仍想直接访问容器内网页
+      # (http://NAS:5555 已可访问同一网页),可取消下面这行的注释并按需改端口:
+      # - "${USBIP_WEB_HOST_BIND:-127.0.0.1}:${USBIP_WEB_HOST_PORT:-18080}:${USBIP_WEB_PORT:-8080}/tcp"
+
+    # usbip-host is a host-kernel driver. The module and USB device nodes
+    # must be visible to this container; privileged is intentionally explicit.
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /lib/modules:/lib/modules:ro
+      # Device names/remarks are persisted here; this mount must be writable.
+      - ./config:/etc/usbip
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/usbip-share-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
