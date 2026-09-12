@@ -11951,7 +11951,7 @@ index 00000000..2d4218c7
 +  "builtin-baseline": "127402f1c75bb3d5ff6bce04b285faa4930a5aca"
 +}
 diff --git a/userspace/wusbip/app.cpp b/userspace/wusbip/app.cpp
-index 6d1dcec3..9b94c7a5 100644
+index 6d1dcec3..1bd0bd71 100644
 --- a/userspace/wusbip/app.cpp
 +++ b/userspace/wusbip/app.cpp
 @@ -17,13 +17,14 @@ using namespace usbip;
@@ -11972,12 +11972,21 @@ index 6d1dcec3..9b94c7a5 100644
                  val = Sys;
          }
  
+@@ -38,7 +39,7 @@ auto init_mainframe(_In_ wxApp::Appearance app)
+                 if (auto &frame = *new MainFrame(std::move(read), static_cast<int>(app)); frame.start_in_tray()) {
+                         frame.iconize_to_tray();
+                 } else {
+-                        frame.Show();
++                        frame.show_initial_window();
+                 }
+                 return true;
+         }
 @@ -47,7 +48,10 @@ auto init_mainframe(_In_ wxApp::Appearance app)
                  err = GetLastErrorMsg();
          }
  
 -        wxSafeShowMessage(_("Fatal error"), err);
-+        err += L"\n\n如果尚未安装 USBIP 内核驱动,请先运行官方安装包安装驱动"
++        err += L"\n\n如果尚未安装 USB-SHARE 内核驱动,请先运行安装包安装驱动"
 +               L"(驱动 usbip2_ude / usbip2_filter),然后再启动本程序。";
 +
 +        wxSafeShowMessage(L"致命错误", err);
@@ -11999,7 +12008,7 @@ index 6d1dcec3..9b94c7a5 100644
 +         */
          SetAppName(wx_string(v.GetProductName()));
          SetVendorName(wx_string(v.GetCompanyName()));
-+        SetAppDisplayName(L"USB-IP 中文客户端");
++        SetAppDisplayName(L"USB-SHARE 客户端");
  }
  
  auto App::set_appearance() -> Appearance
@@ -12205,7 +12214,7 @@ index 1f1547e8..1ca11b87 100644
  std::pair<device_columns, unsigned int> make_device_columns(_In_ const imported_device &dev);
  std::pair<device_columns, unsigned int> make_device_columns(_In_ const device_state &st);
 diff --git a/userspace/wusbip/frame.cpp b/userspace/wusbip/frame.cpp
-index 9ece4f4f..d3e08df7 100644
+index 9ece4f4f..bffc8e10 100644
 --- a/userspace/wusbip/frame.cpp
 +++ b/userspace/wusbip/frame.cpp
 @@ -24,11 +24,13 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
@@ -12720,7 +12729,7 @@ index 9ece4f4f..d3e08df7 100644
 +	m_staticTextServer = new wxStaticText( m_auiToolBarAdd, wxID_ANY, L"服务器", wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL );
  	m_staticTextServer->Wrap( -1 );
 -	m_staticTextServer->SetToolTip( _("USBIP server hostname or IP address") );
-+	m_staticTextServer->SetToolTip( L"USBIP 服务器主机名或 IP 地址" );
++	m_staticTextServer->SetToolTip( L"USB-SHARE 服务端主机名或 IP 地址" );
  
  	m_auiToolBarAdd->AddControl( m_staticTextServer );
  	m_comboBoxServer = new wxComboBox( m_auiToolBarAdd, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, NULL, wxCB_DROPDOWN|wxCB_SORT );
@@ -12895,10 +12904,10 @@ index 1785d06a..78bf5ffc 100644
          wxASSERT(font_incr);
 diff --git a/userspace/wusbip/mgmt.cpp b/userspace/wusbip/mgmt.cpp
 new file mode 100644
-index 00000000..f76c2c3e
+index 00000000..925cb6b3
 --- /dev/null
 +++ b/userspace/wusbip/mgmt.cpp
-@@ -0,0 +1,1070 @@
+@@ -0,0 +1,1210 @@
 +/*
 + * Management-API support (optional HTTP enrichment for the server).
 + *
@@ -12916,6 +12925,7 @@ index 00000000..f76c2c3e
 +#include <ws2tcpip.h>
 +
 +#include <windows.h>
++#include <winhttp.h>
 +
 +#include "wusbip.h"
 +
@@ -13619,12 +13629,135 @@ index 00000000..f76c2c3e
 +        return meta;
 +}
 +
++struct winhttp_handle
++{
++        HINTERNET value{};
++
++        ~winhttp_handle()
++        {
++                if (value) {
++                        WinHttpCloseHandle(value);
++                }
++        }
++
++        winhttp_handle() = default;
++        explicit winhttp_handle(HINTERNET handle) : value(handle) {}
++        winhttp_handle(const winhttp_handle&) = delete;
++        winhttp_handle& operator = (const winhttp_handle&) = delete;
++
++        operator HINTERNET() const noexcept { return value; }
++};
++
++bool is_ip_literal(const std::string &value)
++{
++        IN_ADDR v4{};
++        IN6_ADDR v6{};
++        return InetPtonA(AF_INET, value.c_str(), &v4) == 1 ||
++               InetPtonA(AF_INET6, value.c_str(), &v6) == 1;
++}
++
++/*
++ * Ask a small HTTPS "what is my IP" service for the address seen outside the
++ * local NAT. This is intentionally best-effort: the USB/IP connection and
++ * server heartbeat must keep working when the public-IP service is blocked.
++ *
++ * Query only on the first successful management connection in this process.
++ * Later heartbeats reuse the result, including an empty failed result.
++ */
++std::string fetch_public_ip_from(const wchar_t *host)
++{
++        winhttp_handle session {
++                WinHttpOpen(L"USB-SHARE/0.9.8.0",
++                        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
++                        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0)
++        };
++        if (!session) {
++                return {};
++        }
++
++        WinHttpSetTimeouts(session, 2000, 2000, 3000, 3000);
++
++        winhttp_handle connection {
++                WinHttpConnect(session, host, INTERNET_DEFAULT_HTTPS_PORT, 0)
++        };
++        if (!connection) {
++                return {};
++        }
++
++        winhttp_handle request {
++                WinHttpOpenRequest(connection, L"GET", L"/", nullptr,
++                        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
++                        WINHTTP_FLAG_SECURE)
++        };
++        if (!request) {
++                return {};
++        }
++
++        constexpr wchar_t headers[] = L"Accept: text/plain\r\n";
++        if (!WinHttpSendRequest(request, headers, static_cast<DWORD>(-1L),
++                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
++            !WinHttpReceiveResponse(request, nullptr)) {
++                return {};
++        }
++
++        DWORD status = 0;
++        DWORD status_size = sizeof(status);
++        if (WinHttpQueryHeaders(request,
++                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
++                WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
++                WINHTTP_NO_HEADER_INDEX) && status != 200) {
++                return {};
++        }
++
++        std::string response;
++        response.reserve(64);
++        for (;;) {
++                DWORD available = 0;
++                if (!WinHttpQueryDataAvailable(request, &available) || !available) {
++                        break;
++                }
++
++                constexpr DWORD kMaxResponse = 128;
++                auto remaining = kMaxResponse - static_cast<DWORD>(response.size());
++                if (!remaining) {
++                        break;
++                }
++                auto to_read = std::min(available, remaining);
++                char buffer[kMaxResponse]{};
++                DWORD read = 0;
++                if (!WinHttpReadData(request, buffer, to_read, &read) || !read) {
++                        break;
++                }
++                response.append(buffer, read);
++        }
++
++        response = trim(response);
++        if (!is_ip_literal(response)) {
++                return {};
++        }
++        return response;
++}
++
++std::string fetch_public_ip()
++{
++        // api64 returns IPv6 where available; the IPv4 endpoint is a fallback
++        // for networks whose DNS or IPv6 path does not work.
++        if (auto ip = fetch_public_ip_from(L"api64.ipify.org"); !ip.empty()) {
++                return ip;
++        }
++        return fetch_public_ip_from(L"api.ipify.org");
++}
++
 +std::string make_heartbeat_body(const mgmt::settings &cfg, const std::map<std::string, bool> &attached)
 +{
 +        std::string body = "{\"clientId\":\"";
 +        body += json_escape(cfg.client_id);
 +        body += "\",\"clientName\":\"";
 +        body += json_escape(cfg.client_name);
++        if (!cfg.public_ip.empty()) {
++                body += "\",\"publicIp\":\"";
++                body += json_escape(cfg.public_ip);
++        }
 +        body += "\",\"dataPort\":";
 +        body += std::to_string(cfg.data_port);
 +        body += ",\"busids\":[";
@@ -13802,11 +13935,10 @@ index 00000000..f76c2c3e
 +
 +void MainFrame::mgmt_apply_event(wxThreadEvent &event)
 +{
-+        auto result = static_cast<mgmt_result*>(event.GetPayload<mgmt_result*>());
++        auto result = event.GetPayload<std::shared_ptr<mgmt_result>>();
 +        if (!result) {
 +                return;
 +        }
-+        std::unique_ptr<mgmt_result> guard(result);
 +
 +        auto &tree = *m_treeListCtrl;
 +        if (!tree.GetColumnCount()) {
@@ -13868,6 +14000,9 @@ index 00000000..f76c2c3e
 +
 +void MainFrame::mgmt_loop()
 +{
++        std::string cached_public_ip;
++        bool public_ip_attempted = false; // 本客户端进程只在首次成功连接管理接口时查询一次
++
 +        auto wait_or_stop = [this](int ms) {
 +                for (int waited = 0; waited < ms && !m_mgmt_stop; waited += 200) {
 +                        if (m_mgmt_kick.exchange(false)) {
@@ -13925,7 +14060,7 @@ index 00000000..f76c2c3e
 +                        }
 +                }
 +
-+                auto result = std::make_unique<mgmt_result>();
++                auto result = std::make_shared<mgmt_result>();
 +                if (body.empty()) {
 +                        result->ok = false;
 +                        result->err = last_err;
@@ -13945,6 +14080,21 @@ index 00000000..f76c2c3e
 +                        m_mgmt_ok_port.store(use_port);
 +
 +                        // Register ourselves so the server UI shows the connection owner.
++                        // The server can already see the HTTP peer address, but that may be
++                        // a reverse proxy/VPN address. Query the public IP only once after
++                        // the first successful management connection, then reuse the result
++                        // for all later heartbeats in this client process.
++                        if (!public_ip_attempted) {
++                                public_ip_attempted = true;
++                                if (auto detected = fetch_public_ip(); !detected.empty()) {
++                                        cached_public_ip = std::move(detected);
++                                        wxLogVerbose(L"首次连接检测到本机公网 IP: %s", wxString::FromUTF8(cached_public_ip));
++                                } else {
++                                        wxLogVerbose(L"首次连接查询本机公网 IP 失败,后续心跳使用服务端连接来源地址");
++                                }
++                        }
++                        cfg.public_ip = cached_public_ip;
++
 +                        auto c2 = cfg;
 +                        c2.web_port = use_port; // 心跳与 GET 走同一端口
 +                        http_post_json(c2, "/api/clients/heartbeat", make_heartbeat_body(cfg, attached));
@@ -13958,12 +14108,11 @@ index 00000000..f76c2c3e
 +                // 绝不能因为返回值而再 delete 一次,否则双重释放。
 +                if (ok || !result->err.empty()) {
 +                        auto evt = new wxThreadEvent(wxEVT_THREAD, wxID_ANY);
-+                        evt->SetPayload(result.release());
++                        evt->SetPayload(result); // The queued event owns a shared_ptr, even if discarded.
 +                        wxQueueEvent(this, evt);
 +                }
 +
-+                // NOTE: result was released above when ok; use the local flag, never
-+                // dereference the (now empty) unique_ptr again.
++                // The event retains its shared payload until delivered or discarded.
 +                if (wait_or_stop(ok ? 10000 : 30000)) {
 +                        return;
 +                }
@@ -13971,17 +14120,17 @@ index 00000000..f76c2c3e
 +}
 diff --git a/userspace/wusbip/mgmt.h b/userspace/wusbip/mgmt.h
 new file mode 100644
-index 00000000..88053e41
+index 00000000..cb6b51aa
 --- /dev/null
 +++ b/userspace/wusbip/mgmt.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,52 @@
 +/*
 + * Management-API integration for the USB/IP server (shares the data port by default).
 + *
 + * Optional enrichment layer between this client and the server's HTTP
 + * management endpoint (server/web.py in the usbip-share repository):
 + *   GET  /api/devices              -> device names/remarks/owners (password-free)
-+ *   POST /api/clients/heartbeat    -> register this PC + attached busids
++ *   POST /api/clients/heartbeat    -> register this PC + public IP + attached busids
 + *
 + * Design goals:
 + *  - Everything is optional. If the host does not run the management API,
@@ -14011,6 +14160,7 @@ index 00000000..88053e41
 +        std::string token;             // optional X-Admin-Token (unused by read/heartbeat)
 +        std::string client_id;         // stable per-PC id (persisted)
 +        std::string client_name;       // computer name shown to other users
++        std::string public_ip;         // public IPv4/IPv6 reported in heartbeat, optional
 +};
 +
 +struct meta_device
@@ -14145,7 +14295,7 @@ index 3d3d6934..4708b7ba 100644
  </svg>
 diff --git a/userspace/wusbip/resources/app.manifest b/userspace/wusbip/resources/app.manifest
 new file mode 100644
-index 00000000..d3dc47da
+index 00000000..64bcd28a
 --- /dev/null
 +++ b/userspace/wusbip/resources/app.manifest
 @@ -0,0 +1,28 @@
@@ -14157,7 +14307,7 @@ index 00000000..d3dc47da
 +      version="0.9.7.6"
 +      processorArchitecture="amd64"
 +  />
-+  <description>USB-IP Chinese Client</description>
++  <description>USB-SHARE Client</description>
 +  <dependency>
 +    <dependentAssembly>
 +      <assemblyIdentity
@@ -14374,7 +14524,7 @@ index 5c2a31d4..7767b9ba 100644
 +     style="fill:#70B7E6" />
  </svg>
 diff --git a/userspace/wusbip/taskbaricon.cpp b/userspace/wusbip/taskbaricon.cpp
-index 462dfacb..d83ab6c4 100644
+index 462dfacb..87e56f42 100644
 --- a/userspace/wusbip/taskbaricon.cpp
 +++ b/userspace/wusbip/taskbaricon.cpp
 @@ -1,4 +1,4 @@
@@ -14392,7 +14542,7 @@ index 462dfacb..d83ab6c4 100644
                  Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler(TaskBarIcon::on_open), this, item->GetId());
                  item->SetBitmaps(wxArtProvider::GetBitmap(wxASCII_STR(wxART_FULL_SCREEN), wxASCII_STR(wxART_MENU)));
          }
-@@ -64,13 +64,15 @@ MainFrame& TaskBarIcon::frame() const
+@@ -64,13 +64,19 @@ MainFrame& TaskBarIcon::frame() const
  
  void TaskBarIcon::on_open(wxCommandEvent&)
  {
@@ -14401,19 +14551,23 @@ index 462dfacb..d83ab6c4 100644
 +        auto &f = frame();
  
 -        wxASSERT(IsIconInstalled());
-+        if (f.IsIconized()) {
-+                f.Iconize(false); // 从最小化还原
-+        }
++        // 关闭/最小化收进托盘后,只有托盘菜单或双击可以明确拉回窗口。
++        // 先清掉 m_in_tray,避免启动校正定时器把用户操作误判成启动状态。
++        f.m_in_tray = false;
  
 -        [[maybe_unused]] auto ok = RemoveIcon();
 -        wxASSERT(ok);
++        if (f.IsIconized()) {
++                f.Iconize(false); // 从最小化还原
++        }
++
 +        f.Show();
 +        f.Raise();
 +        // 托盘图标保持常驻(程序运行期间不因打开窗口而移除)
  }
  
  void TaskBarIcon::on_left_dclick(wxTaskBarIconEvent&)
-@@ -81,7 +83,7 @@ void TaskBarIcon::on_left_dclick(wxTaskBarIconEvent&)
+@@ -81,7 +87,7 @@ void TaskBarIcon::on_left_dclick(wxTaskBarIconEvent&)
  
  void TaskBarIcon::show_balloon(_In_ const wxString &text, _In_ int flags)
  {
@@ -14445,7 +14599,7 @@ index 3924e6c0..50028b71 100644
 -set(WXWIDGETS_USE_STL 1)
 -set(WXWIDGETS_USE_STD_CONTAINERS 1)
 diff --git a/userspace/wusbip/utils.cpp b/userspace/wusbip/utils.cpp
-index 13c222ec..5df6e8ef 100644
+index 13c222ec..3299b7bc 100644
 --- a/userspace/wusbip/utils.cpp
 +++ b/userspace/wusbip/utils.cpp
 @@ -1,4 +1,4 @@
@@ -14533,6 +14687,27 @@ index 13c222ec..5df6e8ef 100644
          };
  }
  
+@@ -179,10 +182,18 @@ wxString usbip::to_string(_In_ state state)
+ 
+         switch (state) {
+         case state::unplugged:
+-                s = L'\u25FB'; // white medium square
++        case state::disconnected:
++                s = L"未连接";
+                 break;
+         case state::plugged:
+-                s = L'\u25A3'; // white square containing small black square
++        case state::connected:
++                s = L"已连接";
++                break;
++        case state::connecting:
++                s = L"连接中";
++                break;
++        case state::unplugging:
++                s = L"断开中";
+                 break;
+         default:
+                 s = wxString::FromAscii(vhci::get_state_str(state));
 diff --git a/userspace/wusbip/vcpkg.json b/userspace/wusbip/vcpkg.json
 index 01e000a0..09bd899d 100644
 --- a/userspace/wusbip/vcpkg.json
@@ -14549,7 +14724,7 @@ index 01e000a0..09bd899d 100644
 +  "builtin-baseline": "127402f1c75bb3d5ff6bce04b285faa4930a5aca"
  }
 diff --git a/userspace/wusbip/wusbip.cpp b/userspace/wusbip/wusbip.cpp
-index 751bd661..98fc6efe 100644
+index 751bd661..13989966 100644
 --- a/userspace/wusbip/wusbip.cpp
 +++ b/userspace/wusbip/wusbip.cpp
 @@ -1,4 +1,4 @@
@@ -14558,19 +14733,39 @@ index 751bd661..98fc6efe 100644
   * Copyright (c) 2023-2026 Vadym Hrynchyshyn <vadimgrn@gmail.com>
   */
  
-@@ -27,6 +27,8 @@
+@@ -26,7 +26,12 @@
+ #include <wx/headerctrl.h>
  #include <wx/clipbrd.h>
  #include <wx/persist/dataview.h>
++#include <wx/dc.h>
++#include <wx/itemattr.h>
++#include <wx/aui/dockart.h>
  
 +#include <algorithm>
 +#include <cwchar>
  #include <format>
  #include <set>
  
-@@ -35,6 +37,62 @@ namespace
+@@ -35,6 +40,137 @@ namespace
  
  using namespace usbip;
  
++class FlatToolBarArt final : public wxAuiGenericToolBarArt
++{
++public:
++        wxAuiToolBarArt* Clone() override { return new FlatToolBarArt(*this); }
++        void DrawBackground(wxDC& dc, wxWindow* wnd, const wxRect& rect) override
++        {
++                dc.SetPen(*wxTRANSPARENT_PEN);
++                dc.SetBrush(wxBrush(wnd->GetBackgroundColour()));
++                dc.DrawRectangle(rect);
++        }
++        void DrawPlainBackground(wxDC& dc, wxWindow* wnd, const wxRect& rect) override
++        {
++                DrawBackground(dc, wnd, rect);
++        }
++};
++
 +struct ui_palette
 +{
 +        wxColour window;
@@ -14606,8 +14801,8 @@ index 751bd661..98fc6efe 100644
 +                        wxColour(230, 237, 243),  // text
 +                        wxColour(165, 177, 192),  // muted_text
 +                        wxColour(190, 201, 214),  // header_text
-+                        wxColour(105, 183, 232),  // accent
-+                        wxColour(15, 30, 43),     // accent_text
++                        wxColour(57, 76, 99),      // accent (soft action button)
++                        wxColour(230, 237, 243),   // accent_text
 +                        wxColour(63, 75, 91),     // border
 +                };
 +        }
@@ -14621,16 +14816,75 @@ index 751bd661..98fc6efe 100644
 +                wxColour(31, 41, 55),             // text
 +                wxColour(100, 116, 139),          // muted_text
 +                wxColour(71, 85, 105),            // header_text
-+                wxColour(37, 99, 235),            // accent
-+                wxColour(255, 255, 255),          // accent_text
++                wxColour(229, 238, 248),          // accent (soft action button)
++                wxColour(30, 76, 112),             // accent_text
 +                wxColour(214, 222, 232),          // border
 +        };
++}
++
++/*
++ * Windows 11 默认把新注册的传统 NotifyIcon 放进"隐藏图标"弹窗,所以用户
++ * 会误以为右下角图标消失。wxTaskBarIcon 使用的是传统 UID 方式;Shell 会在
++ * HKCU\\Control Panel\\NotifyIconSettings\\<id> 下为它创建注册项。把当前进程
++ * 对应项标记为 IsPromoted=1 后,图标会回到通知区域主栏。
++ *
++ * 这是用户明确需要的客户端常驻图标,不是修改系统全局设置:只匹配当前 exe 的
++ * 单个注册项,不触碰其他程序的通知图标。Windows 10 没有该值时会忽略它。
++ */
++void promote_taskbar_icon()
++{
++        wchar_t module_path[32768]{};
++        auto length = ::GetModuleFileNameW(nullptr, module_path, ARRAYSIZE(module_path));
++        if (!length || length >= ARRAYSIZE(module_path)) {
++                return;
++        }
++
++        HKEY root{};
++        constexpr auto subkey = L"Control Panel\\NotifyIconSettings";
++        if (::RegOpenKeyExW(HKEY_CURRENT_USER, subkey, 0, KEY_READ, &root) != ERROR_SUCCESS) {
++                return;
++        }
++
++        for (DWORD index = 0;; ++index) {
++                wchar_t key_name[256]{};
++                DWORD key_name_len = ARRAYSIZE(key_name);
++                auto result = ::RegEnumKeyExW(root, index, key_name, &key_name_len,
++                        nullptr, nullptr, nullptr, nullptr);
++                if (result == ERROR_NO_MORE_ITEMS) {
++                        break;
++                }
++                if (result != ERROR_SUCCESS) {
++                        continue;
++                }
++
++                HKEY item{};
++                if (::RegOpenKeyExW(root, key_name, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &item) != ERROR_SUCCESS) {
++                        continue;
++                }
++
++                wchar_t executable[32768]{};
++                DWORD type = 0;
++                DWORD bytes = sizeof(executable);
++                auto query = ::RegQueryValueExW(item, L"ExecutablePath", nullptr, &type,
++                        reinterpret_cast<BYTE*>(executable), &bytes);
++                if (query == ERROR_SUCCESS && type == REG_SZ &&
++                    _wcsicmp(executable, module_path) == 0) {
++                        DWORD promoted = 1;
++                        ::RegSetValueExW(item, L"IsPromoted", 0, REG_DWORD,
++                                reinterpret_cast<const BYTE*>(&promoted), sizeof(promoted));
++                        ::RegCloseKey(item);
++                        break;
++                }
++                ::RegCloseKey(item);
++        }
++
++        ::RegCloseKey(root);
 +}
 +
  const auto g_persistent_mark = L'\u2713'; // CHECK MARK, 2714 HEAVY CHECK MARK
  auto &g_key_devices = L"/devices";
  auto &g_key_url = L"url";
-@@ -53,6 +111,9 @@ inline auto get_appearance_value(_In_ int itemid) noexcept
+@@ -53,6 +189,9 @@ inline auto get_appearance_value(_In_ int itemid) noexcept
          return itemid - wxID_FILE1;
  }
  
@@ -14640,7 +14894,7 @@ index 751bd661..98fc6efe 100644
  consteval auto get_saved_keys()
  {
          using key_val = std::pair<const wchar_t* const, column_pos_t>;
-@@ -64,8 +125,9 @@ consteval auto get_saved_keys()
+@@ -64,8 +203,9 @@ consteval auto get_saved_keys()
                  { L"vendor", COL_VENDOR },
                  { L"product", COL_PRODUCT },
                  { L"serial", COL_SERIAL },
@@ -14651,7 +14905,7 @@ index 751bd661..98fc6efe 100644
  }
  
  consteval auto get_saved_flags()
-@@ -79,13 +141,6 @@ consteval auto get_saved_flags()
+@@ -79,13 +219,6 @@ consteval auto get_saved_flags()
          return flags;
  }
  
@@ -14665,7 +14919,7 @@ index 751bd661..98fc6efe 100644
  constexpr auto is_port_residual(_In_ state st)
  {
          switch (st) {
-@@ -115,9 +170,10 @@ void log(_In_ const device_state &st)
+@@ -115,9 +248,10 @@ void log(_In_ const device_state &st)
          auto &d = st.device;
          auto &loc = d.location;
  
@@ -14679,7 +14933,7 @@ index 751bd661..98fc6efe 100644
  
          wxLogVerbose(wxString::FromUTF8(s));
  }
-@@ -129,7 +185,7 @@ void log(_In_ const wxTreeListCtrl &tree, _In_ wxTreeListItem dev, _In_ const wx
+@@ -129,7 +263,7 @@ void log(_In_ const wxTreeListCtrl &tree, _In_ wxTreeListItem dev, _In_ const wx
  
          auto s = wxString::Format(
                          L"%s:%s/%s, port '%s', devid '%s', speed '%s', vendor '%s', product '%s', "
@@ -14688,7 +14942,7 @@ index 751bd661..98fc6efe 100644
                          prefix, url,
                          tree.GetItemText(dev, COL_BUSID),
                          tree.GetItemText(dev, COL_PORT),
-@@ -140,6 +196,7 @@ void log(_In_ const wxTreeListCtrl &tree, _In_ wxTreeListItem dev, _In_ const wx
+@@ -140,6 +274,7 @@ void log(_In_ const wxTreeListCtrl &tree, _In_ wxTreeListItem dev, _In_ const wx
                          tree.GetItemText(dev, COL_SERIAL), 
                          tree.GetItemText(dev, COL_STATE), 
                          tree.GetItemText(dev, COL_PERSISTENT), 
@@ -14696,7 +14950,7 @@ index 751bd661..98fc6efe 100644
                          tree.GetItemText(dev, COL_NOTES),
                          tree.GetItemText(dev, COL_SOURCE_ID));
  
-@@ -153,13 +210,13 @@ auto load_license()
+@@ -153,13 +288,13 @@ auto load_license()
          auto hres = FindResource(nullptr, MAKEINTRESOURCE(IDR_LICENSE), RT_RCDATA);
          if (!hres) {
                  auto err = GetLastError();
@@ -14712,7 +14966,7 @@ index 751bd661..98fc6efe 100644
          }
  
          auto txt = LockResource(hmem);
-@@ -168,45 +225,117 @@ auto load_license()
+@@ -168,45 +303,117 @@ auto load_license()
          return s = wxString::FromAscii(static_cast<const char*>(txt), len);
  }
  
@@ -14799,13 +15053,14 @@ index 751bd661..98fc6efe 100644
 +
 +        wxASSERT(columns & columns::pers_all);
 +        static_assert(!(get_saved_flags() & mkflag(COL_PERSISTENT)));
++
++        auto key = make_persistent_device(dc);
  
 -                constexpr auto pers_flag = mkflag(COL_PERSISTENT);
 -                wxASSERT(!(flags & pers_flag));
-+        auto key = make_persistent_device(dc);
-+
 +        if (auto pd = persistent.find(key); pd != persistent.end()) {
-+
+ 
+-                flags |= pers_flag;
 +                if (columns & columns::pers_persistent) {
 +                        dc[COL_PERSISTENT] = g_persistent_mark;
 +                        wxASSERT(!(flags & mkflag(COL_PERSISTENT)));
@@ -14816,8 +15071,7 @@ index 751bd661..98fc6efe 100644
 +                        dc[COL_SERIAL] = wxString::FromUTF8(pd->serial);
 +                        flags |= mkflag(COL_SERIAL);
 +                }
- 
--                flags |= pers_flag;
++
 +                if (columns & columns::pers_recv_mode) {
 +                        dc[COL_RECEIVE_MODE] = to_string(pd->recv_mode);
 +                        wxASSERT(flags & mkflag(COL_RECEIVE_MODE));
@@ -14854,7 +15108,7 @@ index 751bd661..98fc6efe 100644
  using predicate_f = std::function<bool(const wxTreeListCtrl&, wxTreeListItem)>;
  
  auto is_server(_In_ const wxTreeListCtrl &tree, _In_ wxTreeListItem item) // predicate_f
-@@ -260,9 +389,10 @@ auto make_persistent_device(
+@@ -260,9 +467,10 @@ auto make_persistent_device(
  {
          auto &url = tree.GetItemText(server);
          auto &busid = tree.GetItemText(device);
@@ -14867,7 +15121,7 @@ index 751bd661..98fc6efe 100644
  }
  
  auto get_persistent(_In_ const Handle &vhci = get_vhci())
-@@ -273,7 +403,7 @@ auto get_persistent(_In_ const Handle &vhci = get_vhci())
+@@ -273,7 +481,7 @@ auto get_persistent(_In_ const Handle &vhci = get_vhci())
                  result = as_set(*v);
          } else {
                  auto err = GetLastError();
@@ -14876,7 +15130,7 @@ index 751bd661..98fc6efe 100644
          }
  
          return result;
-@@ -310,6 +440,7 @@ auto get_saved()
+@@ -310,6 +518,7 @@ auto get_saved()
                          continue;
                  }
  
@@ -14884,7 +15138,7 @@ index 751bd661..98fc6efe 100644
                  result.push_back(std::move(dev));
          }
  
-@@ -372,24 +503,77 @@ wxDEFINE_EVENT(EVT_DEVICE_STATE, DeviceStateEvent);
+@@ -372,24 +581,75 @@ wxDEFINE_EVENT(EVT_DEVICE_STATE, DeviceStateEvent);
  
  MainFrame::MainFrame(_In_ Handle read, _In_ int appearance) : 
          Frame(nullptr),
@@ -14902,20 +15156,18 @@ index 751bd661..98fc6efe 100644
          
          init();
          restore_state();
++        configure_workspace_ui();
 +        sync_auto_connect_menu();
          post_refresh();
 +        schedule_auto_connect();
 +        mgmt_start();
 +
-+        /*
-+         * 窗口状态兜底(见 ensure_visible_window)。
-+         *
-+         * 双保险: CallAfter 让校正在本轮事件循环尽早跑一次(用户几乎看不到窗口
-+         * 停留在"最小化"状态的闪烁); 定时器再补一次,兜住 wx 把几何恢复推迟到
-+         * 更晚才落地的情况。函数是幂等的,跑两次没有副作用。
-+         */
-+        CallAfter(&MainFrame::ensure_visible_window);
-+        m_window_fix_timer.StartOnce(400);
++        // Restore historic minimized state before accepting user actions. Do not
++        // schedule delayed Show(): it races with a user's close/minimize click.
++        if (IsIconized()) {
++                Iconize(false);
++        }
++        m_restoring_window = false;
  }
  
  MainFrame::~MainFrame()
@@ -14965,7 +15217,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::check_view_appearance(_In_ int appearance)
-@@ -399,7 +583,7 @@ void MainFrame::check_view_appearance(_In_ int appearance)
+@@ -399,7 +659,7 @@ void MainFrame::check_view_appearance(_In_ int appearance)
          if (auto itm = m_view_appearance->FindItem(id); itm && itm->GetKind() == wxITEM_RADIO) {
                  itm->Check();
          } else {
@@ -14974,17 +15226,17 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -408,8 +592,7 @@ void MainFrame::init()
+@@ -408,8 +668,7 @@ void MainFrame::init()
          m_log->SetVerbose(true); // produce messages for wxLOG_Info
          m_log->SetLogLevel(DEFAULT_LOGLEVEL);
  
 -        auto app_name = wxGetApp().GetAppDisplayName();
 -        SetTitle(app_name);
-+        SetTitle(wxString(L"USB-IP 中文客户端"));
++        SetTitle(wxString(L"USB-SHARE 客户端"));
  
          SetIcon(wxIcon(L"USBip")); // see wxwidgets.rc
          
-@@ -424,21 +607,112 @@ void MainFrame::init()
+@@ -424,21 +683,112 @@ void MainFrame::init()
          m_spinCtrlPort->SetValue(wxString::FromAscii(port)); // NI_MAXSERV
  
          init_tree_list();
@@ -15108,7 +15360,7 @@ index 751bd661..98fc6efe 100644
  void MainFrame::init_tree_list()
  {
          auto &tree = *m_treeListCtrl;
-@@ -451,9 +725,6 @@ void MainFrame::init_tree_list()
+@@ -451,9 +801,6 @@ void MainFrame::init_tree_list()
  
          if (auto hdr = dv.GenericGetHeader()) {
                  hdr->Bind(wxEVT_MOUSEWHEEL, wxMouseEventHandler(MainFrame::on_tree_mouse_wheel), this);
@@ -15118,10 +15370,230 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -479,6 +750,220 @@ void MainFrame::restore_state()
-         wxPersistentRegisterAndRestore(m_treeListCtrl->GetDataView(), m_treeListCtrl->GetName());
+@@ -473,10 +820,458 @@ wxWithImages::Images MainFrame::get_tree_images()
+         static_assert(IMG_DEVICE == 1);
  }
  
++void MainFrame::configure_workspace_ui()
++{
++        // One stable row: server + port on the left, device actions on the right.
++        // Low-frequency operations (停止/全部断开/加载/保存) stay in the menus and the
++        // device context menu instead of claiming a second toolbar row.
++        m_mgr.DetachPane(m_auiToolBar);
++        m_auiToolBar->Hide(); // Keep generated item pointers alive for Frame's destructor.
++
++        // Stretch spacer pushes 连接/断开/刷新 to the far right of this same row, so the
++        // empty space that used to sit to their left is taken up by the fields above.
++        m_auiToolBarAdd->AddStretchSpacer();
++        for (auto item : {m_tool_attach, m_tool_detach, m_tool_reload}) {
++                m_auiToolBarAdd->AddTool(item->GetId(), item->GetLabel(), item->GetBitmap(), item->GetShortHelp());
++        }
++        const auto palette = make_ui_palette();
++        m_auiToolBarAdd->SetBackgroundColour(palette.surface);
++        m_auiToolBarAdd->SetForegroundColour(palette.text);
++        m_auiToolBarAdd->SetArtProvider(new FlatToolBarArt());
++        m_auiToolBarAdd->SetWindowStyleFlag((m_auiToolBarAdd->GetWindowStyleFlag() & ~wxAUI_TB_GRIPPER)
++                                            | wxAUI_TB_HORZ_LAYOUT | wxAUI_TB_TEXT);
++        m_auiToolBarAdd->SetMargins(FromDIP(12), FromDIP(8));
++        m_auiToolBarAdd->SetToolPacking(FromDIP(8));
++        m_auiToolBarAdd->SetToolBorderPadding(FromDIP(5));
++
++        // 工具栏文字的显隐开关(视图菜单)现在应当作用于这条可见工具栏。
++        m_primary_bar = m_auiToolBarAdd;
++
++        m_staticTextServer->SetLabel(L"服务端");
++        m_comboBoxServer->SetMinSize(FromDIP(wxSize(230, -1)));
++        m_spinCtrlPort->SetMinSize(FromDIP(wxSize(82, -1)));
++        m_button_add->SetLabel(L"读取设备");
++        m_button_add->SetToolTip(L"读取此服务器的共享列表，不会自动连接设备");
++        m_button_add->SetBitmap(wxNullBitmap);
++        m_comboBoxServer->SetHint(L"IP 地址或域名");
++        m_auiToolBarAdd->Realize();
++        m_mgr.GetPane(m_auiToolBarAdd).Layer(10).Row(0).Position(0).Gripper(false).PaneBorder(false)
++                .BestSize(m_auiToolBarAdd->GetBestSize());
++        m_mgr.GetPane(m_treeListCtrl).CaptionVisible(false);
++        m_mgr.Update();
++
++        // Move preference toggles into their own menu, preserving existing bindings.
++        auto settings = new wxMenu();
++        const auto items = m_menu_file->GetMenuItems();
++        std::vector<wxMenuItem*> preferences;
++        for (auto item : items) {
++                if (item->IsCheckable() || item->GetId() == ID_LOCAL_NAME) preferences.push_back(item);
++        }
++        for (auto item : preferences) {
++                auto id = item->GetId();
++                settings->Append(m_menu_file->Remove(item));
++                settings->Bind(wxEVT_MENU, [this](wxCommandEvent& event) {
++                        m_menu_file->GetEventHandler()->ProcessEvent(event);
++                }, id);
++        }
++        m_menu_file->AppendSubMenu(settings, L"偏好设置");
++
++        auto fit = m_menu_view->AppendCheckItem(wxID_ANY, L"自动分配列宽", L"按窗口宽度分配设备信息，手动拖动列宽时暂停");
++        m_auto_fit_columns = wxConfig::Get()->ReadBool(L"AutoFitColumns", true);
++        fit->Check(m_auto_fit_columns);
++        m_menu_view->Bind(wxEVT_MENU, [this](wxCommandEvent& e) {
++                m_auto_fit_columns = e.IsChecked();
++                wxConfig::Get()->Write(L"AutoFitColumns", m_auto_fit_columns);
++                fit_visible_columns();
++        }, fit->GetId());
++        Bind(wxEVT_UPDATE_UI, [this](wxUpdateUIEvent& e) { e.Check(m_auto_fit_columns); }, fit->GetId());
++        auto& view = *m_treeListCtrl->GetDataView();
++        auto table_font = view.GetFont();
++        table_font.SetFaceName(L"Microsoft YaHei UI");
++        m_treeListCtrl->SetFont(table_font);
++        view.SetFont(table_font);
++        view.SetRowHeight(FromDIP(32));
++        const auto p = make_ui_palette();
++        view.SetHeaderAttr(wxItemAttr(p.header_text, p.surface_alt, GetFont()));
++        view.Bind(wxEVT_SIZE, [this](wxSizeEvent& e) {
++                e.Skip();
++                if (!m_column_fit_pending) {
++                        m_column_fit_pending = true;
++                        CallAfter([this] { m_column_fit_pending = false; fit_visible_columns(); });
++                }
++        });
++        if (auto header = view.GenericGetHeader()) {
++                header->Bind(wxEVT_HEADER_END_RESIZE, [this](wxHeaderCtrlEvent& e) {
++                        if (!m_fitting_columns) {
++                                m_auto_fit_columns = false;
++                                wxConfig::Get()->Write(L"AutoFitColumns", false);
++                        }
++                        e.Skip();
++                });
++        }
++        m_statusBar->SetStatusText(L"选择设备后连接 · 高级信息可在“视图 → 列”中展开", 0);
++        const int widths[] = {-1, FromDIP(245)};
++        m_statusBar->SetStatusWidths(2, widths);
++}
++
++void MainFrame::fit_visible_columns()
++{
++        if (!m_auto_fit_columns || m_fitting_columns || !m_treeListCtrl) return;
++        auto& view = *m_treeListCtrl->GetDataView();
++        const int available = view.GetClientSize().x - FromDIP(10);
++        if (available < FromDIP(200)) return;
++        struct column_width { wxDataViewColumn* col; int minimum; int weight; };
++        std::vector<column_width> visible;
++        int total_min = 0, total_weight = 0;
++        for (unsigned i = 0; i < view.GetColumnCount(); ++i) {
++                auto col = view.GetColumn(i);
++                if (col->IsHidden()) continue;
++                const auto title = col->GetTitle();
++                int minimum = 90, weight = 1;
++                if (title == L"服务器 / 总线号") { minimum = 160; weight = 3; }
++                else if (title == L"产品" || title == L"备注") { minimum = 140; weight = 4; }
++                else if (title == L"状态") { minimum = 88; weight = 1; }
++                else if (title == L"自动") { minimum = 62; weight = 1; }
++                minimum = FromDIP(minimum);
++                visible.push_back({col, minimum, weight});
++                total_min += minimum; total_weight += weight;
++        }
++        if (!total_weight) return;
++        const int extra = std::max(0, available - total_min);
++        m_fitting_columns = true;
++        for (auto item : visible) {
++                const int width = item.minimum + extra * item.weight / total_weight;
++                if (item.col->WXGetSpecifiedWidth() != width) item.col->SetWidth(width);
++        }
++        m_fitting_columns = false;
++}
++
++void MainFrame::apply_compact_columns()
++{
++        constexpr auto kLayoutVersion = 4L;
++        constexpr wchar_t kLayoutKey[] = L"CompactColumnsVersion";
++
++        auto cfg = wxConfig::Get();
++        if (!cfg || cfg->ReadLong(kLayoutKey, 0L) >= kLayoutVersion) {
++                return; // 已迁移过,以后尊重用户在"视图 -> 列"里的手动选择
++        }
++
++        struct default_column {
++                const wchar_t *title;
++                int width;
++                bool hide;
++        };
++
++        /*
++         * 默认只保留日常连接真正需要的信息:
++         *   服务器/总线号 + 产品 + 状态 + 自动 + 备注
++         *
++         * 设备列表现在不是把 14 列平均摊开,而是给常用信息更充足的宽度。
++         * 低频列仍然可以从"视图 -> 列"随时打开,只是首次使用时不占屏幕:
++         *   端口/速率/厂商       - 硬件拓扑与 USB 描述信息,大多数时候不需要
++         *   序列号/接收模式      - 高级诊断/设备区分信息
++         *   源ID/设备ID          - 内部诊断字段(本来就默认隐藏)
++         *   服务器备注/占用方    - 管理接口高级信息,空白时尤其浪费宽度
++         *
++         * 宽度是物理像素,按 4K/200% 屏幕实际效果调过:服务器和产品名不再被
++         * 截断,备注也留有足够空间。按标题查找而不是按枚举下标,因为用户可能
++         * 已经拖动过列顺序。
++         */
++        constexpr default_column columns[] = {
++                {L"服务器 / 总线号", 420, false},
++                {L"端口",             100, true},
++                {L"速率",             100, true},
++                {L"厂商",             220, true},
++                {L"产品",             220, false},
++                {L"状态",             130, false},
++                {L"自动",             100, false},
++                {L"备注",             360, false},
++                {L"设备ID",           150, true},
++                {L"序列号",           220, true},
++                {L"接收模式",         160, true},
++                {L"源ID",             120, true},
++                {L"服务器备注",       260, true},
++                {L"占用方",           200, true},
++        };
++
++        int changed{};
++        for (const auto &item: columns) {
++                if (auto col = find_column(item.title)) {
++                        if (item.hide && !col->IsHidden()) {
++                                col->SetHidden(true);
++                                ++changed;
++                        }
++                        col->SetWidth(item.width);
++                }
++        }
++
++        /*
++         * wxPersistentDataViewCtrl 通常在窗口退出时才保存 Hidden/Width 值,但布局
++         * 版本标记现在就要写入。若用户此时直接杀进程,下次启动看到版本 2 却没有
++         * 迁移值,布局会恢复成旧的拥挤状态。因此把这次迁移的属性立即写入同一
++         * 个持久化路径;之后 wxPersistentDataViewCtrl 仍会继续保存用户手动调整。
++         * 对默认可见列不强写 Hidden,避免覆盖用户在升级前已经主动隐藏的列。
++         */
++        const auto old_path = cfg->GetPath();
++        constexpr wchar_t kColumnsPath[] = L"/Persistent_Options/DataView/wxTreeListCtrl/Columns";
++        for (const auto &item: columns) {
++                /*
++                 * 每轮都从完整路径开始。列标题"服务器 / 总线号"本身含有 '/',
++                 * wxConfig 会把它编码成持久化路径的两级节点;不能用 SetPath("..")
++                 * 依赖相对路径回退,否则下一列会被误写到"服务器"子键下面。
++                 */
++                cfg->SetPath(kColumnsPath);
++                cfg->SetPath(item.title);
++                cfg->Write(L"Width", item.width);
++                if (item.hide) {
++                        cfg->Write(L"Hidden", true);
++                }
++        }
++        cfg->SetPath(old_path);
++        cfg->Write(kLayoutKey, kLayoutVersion);
++        cfg->Flush();
++        wxLogVerbose(L"已应用紧凑设备列表布局,隐藏 %d 个低频列并放宽常用列;可从“视图 -> 列”恢复", changed);
++}
++
+ void MainFrame::restore_state()
+ {
+         wxPersistentRegisterAndRestore(this, L"MainFrame"); // @see persist.h
+         wxPersistentRegisterAndRestore(m_treeListCtrl->GetDataView(), m_treeListCtrl->GetName());
++        apply_compact_columns();
++}
++
 +/*
 + * 修一个由"恢复上次窗口状态"引入的坑:
 + *
@@ -15134,9 +15606,19 @@ index 751bd661..98fc6efe 100644
 + * 最小化状态下 GetWindowRect 返回的是 -32000 之类的占位矩形(尺寸是最小化后
 + * 的 ~314x50),拿它去做"夹回工作区"会把窗口尺寸改坏。
 + */
++void MainFrame::show_initial_window()
++{
++        m_restoring_window = true;
++        if (IsIconized()) Iconize(false);
++        Show();
++        ensure_visible_window();
++        m_restoring_window = false;
++        fit_visible_columns();
++}
++
 +void MainFrame::ensure_visible_window()
 +{
-+        if (m_start_in_tray) {
++        if (m_start_in_tray || m_in_tray) {
 +                return; // 用户要的就是托盘常驻,别去打扰
 +        }
 +
@@ -15219,7 +15701,8 @@ index 751bd661..98fc6efe 100644
 +namespace { // HKCU ...\Run autostart helpers
 +
 +constexpr wchar_t kRunKeyPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-+constexpr wchar_t kRunValueName[] = L"USB-IP 中文客户端";
++constexpr wchar_t kRunValueName[] = L"USB-SHARE";
++constexpr wchar_t kLegacyRunValueName[] = L"USB-IP 中文客户端";
 +
 +bool read_auto_start()
 +{
@@ -15228,6 +15711,10 @@ index 751bd661..98fc6efe 100644
 +                return false;
 +        }
 +        auto rc = RegQueryValueExW(key, kRunValueName, nullptr, nullptr, nullptr, nullptr);
++        if (rc != ERROR_SUCCESS) {
++                // 升级旧版时兼容旧的启动项名称,避免用户的开机自启动选项突然失效。
++                rc = RegQueryValueExW(key, kLegacyRunValueName, nullptr, nullptr, nullptr, nullptr);
++        }
 +        RegCloseKey(key);
 +        return rc == ERROR_SUCCESS; // 值存在即视为已开启
 +}
@@ -15240,8 +15727,10 @@ index 751bd661..98fc6efe 100644
 +                        return true; // 打开失败视为目标已不存在
 +                }
 +                auto rc = RegDeleteValueW(key, kRunValueName);
++                auto legacy_rc = RegDeleteValueW(key, kLegacyRunValueName);
 +                RegCloseKey(key);
-+                return rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND;
++                return (rc == ERROR_SUCCESS || rc == ERROR_FILE_NOT_FOUND) &&
++                       (legacy_rc == ERROR_SUCCESS || legacy_rc == ERROR_FILE_NOT_FOUND);
 +        }
 +
 +        wchar_t exe[MAX_PATH]{};
@@ -15256,6 +15745,10 @@ index 751bd661..98fc6efe 100644
 +        }
 +        auto rc = RegSetValueExW(key, kRunValueName, 0, REG_SZ,
 +                        reinterpret_cast<const BYTE*>(cmd.wc_str()), static_cast<DWORD>((cmd.Len()+1)*sizeof(wchar_t)));
++        if (rc == ERROR_SUCCESS) {
++                // 新名称写入成功后清掉旧名称,避免升级后两个客户端同时自启动。
++                RegDeleteValueW(key, kLegacyRunValueName);
++        }
 +        RegCloseKey(key);
 +        return rc == ERROR_SUCCESS;
 +}
@@ -15306,8 +15799,7 @@ index 751bd661..98fc6efe 100644
 +                for (auto d = tree.GetFirstChild(s); d.IsOk(); d = tree.GetNextSibling(d)) {
 +                        ++devices;
 +                        auto &st = tree.GetItemText(d, COL_STATE);
-+                        if (st == wxString::FromAscii(usbip::vhci::get_state_str(usbip::state::connected)) ||
-+                            st == wxString::FromAscii(usbip::vhci::get_state_str(usbip::state::plugged))) {
++                        if (st == to_string(state::plugged)) {
 +                                ++connected;
 +                        }
 +                }
@@ -15334,20 +15826,22 @@ index 751bd661..98fc6efe 100644
 +                add_exported_devices(evt);
 +                m_auto_connecting = false;
 +        });
-+}
-+
+ }
+ 
  void MainFrame::post_refresh()
- {
-         wxCommandEvent evt(wxEVT_COMMAND_MENU_SELECTED, wxID_REFRESH);
-@@ -497,18 +982,32 @@ void MainFrame::on_close(wxCloseEvent &event)
+@@ -497,18 +1292,39 @@ void MainFrame::on_close(wxCloseEvent &event)
          wxLogVerbose(wxString::FromAscii(__func__));
          wxASSERT(event.GetEventType() == wxEVT_CLOSE_WINDOW);
  
 -        if (m_close_to_tray && event.CanVeto()) {
+-                iconize_to_tray();
 +        // 未勾选「关闭时直接退出」:点 × 收进系统托盘后台常驻(角标保留)
 +        if (!m_close_to_tray && event.CanVeto()) {
-                 iconize_to_tray();
++                // 先否决关闭,再隐藏窗口。Windows 下先 Hide 后 Veto 在部分 wx
++                // 版本/主题组合中会把这次关闭当成已处理,导致窗口既没显示也没
++                // 正确留在托盘生命周期里。
                  event.Veto();
++                iconize_to_tray();
                  return;
          }
  
@@ -15364,20 +15858,42 @@ index 751bd661..98fc6efe 100644
 +{
 +        wxLogVerbose(wxString::FromAscii(__func__));
 +
++        if (m_restoring_window) {
++                event.Skip();
++                return;
++        }
 +        if (event.IsIconized()) {
-+                // 最小化 = 收进系统托盘(任务栏不再保留窗口)
 +                iconize_to_tray();
 +        }
++        event.Skip();
 +}
 +
  void MainFrame::on_exit(wxCommandEvent&)
  {
          Close(true);
-@@ -518,22 +1017,87 @@ void MainFrame::iconize_to_tray()
+@@ -518,22 +1334,107 @@ void MainFrame::iconize_to_tray()
  {
          auto &log = *m_log->GetFrame();
  
++        m_in_tray = true;
 +        ensure_taskbar_icon(); // 常驻图标:已存在则复用,已安装则跳过
++
++        /*
++         * 关键:必须先把"最小化"状态清掉再隐藏。
++         *
++         * 最小化时 wx/Windows 会给窗口打上 iconic 标记;如果直接 Hide(),窗口就是
++         * "处于最小化状态但不可见"。这种窗口会被系统随时还原出来——点击任务栏按钮、
++         * 焦点变化、或一次激活消息都会让它自己弹回前台,表现为"收进托盘后又自动蹦出来"。
++         * (诊断脚本实测过:最小化后 IsIconic() 一直为 1,而 visible=0。)
++         *
++         * Iconize(false) 与 Hide() 之间没有消息循环,不会产生可见闪烁;
++         * m_restoring_window 用于阻止这次状态变更再次触发 on_iconize()。
++         */
++        m_restoring_window = true;
++        if (IsIconized()) {
++                Iconize(false);
++        }
++        m_restoring_window = false;
 +
 +        log.Hide();
 +        Hide();
@@ -15393,6 +15909,7 @@ index 751bd661..98fc6efe 100644
 +        }
 +
 +        if (m_taskbar_icon->IsIconInstalled()) {
++                promote_taskbar_icon();
                  return;
          }
 -        
@@ -15417,7 +15934,8 @@ index 751bd661..98fc6efe 100644
          } else {
 -                log.Hide();
 -                Hide();
-+                wxLogVerbose(L"托盘图标已安装");
++                promote_taskbar_icon();
++                wxLogVerbose(L"托盘图标已安装并设为通知区域主图标");
          }
  }
  
@@ -15469,7 +15987,7 @@ index 751bd661..98fc6efe 100644
  void MainFrame::read_loop()
  {
          auto on_exit = [] (auto frame)
-@@ -550,7 +1114,7 @@ void MainFrame::read_loop()
+@@ -550,7 +1451,7 @@ void MainFrame::read_loop()
          }
  
          if (auto err = GetLastError(); err != ERROR_OPERATION_ABORTED) { // see CancelSynchronousIo
@@ -15478,7 +15996,7 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -564,7 +1128,7 @@ void MainFrame::break_read_loop()
+@@ -564,7 +1465,7 @@ void MainFrame::break_read_loop()
  
          for (int i = 0; i < 300 && !cancel_read(); ++i, std::this_thread::sleep_for(std::chrono::milliseconds(100))) {
                  if (auto err = GetLastError(); err != ERROR_NOT_FOUND) { // could not find a request to cancel
@@ -15487,16 +16005,19 @@ index 751bd661..98fc6efe 100644
                          break; // wxLogSysError does not compile if wxNO_IMPLICIT_WXSTRING_ENCODING is set
                  }
          }
-@@ -586,6 +1150,8 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -586,8 +1487,10 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          auto &st = event.get();
          log(st);
  
 +        mgmt_note_state(st);
 +
          if (m_taskbar_icon && m_taskbar_icon->IsIconInstalled()) {
-                 auto s = wxString::FromAscii(vhci::get_state_str(st.state)) + L' ' + make_device_url(st.device.location);
+-                auto s = wxString::FromAscii(vhci::get_state_str(st.state)) + L' ' + make_device_url(st.device.location);
++                auto s = to_string(st.state) + L' ' + make_device_url(st.device.location);
                  m_taskbar_icon->show_balloon(s);
-@@ -597,11 +1163,11 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+         }
+ 
+@@ -597,11 +1500,11 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
                  auto server = tree.GetItemParent(dev);
                  auto &url = tree.GetItemText(server);
                  auto &busid = tree.GetItemText(dev);
@@ -15510,7 +16031,7 @@ index 751bd661..98fc6efe 100644
                  remove_device(dev);
                  return;
          }
-@@ -609,7 +1175,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -609,7 +1512,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          if (auto &cur_id = tree.GetItemText(dev, COL_SOURCE_ID); cur_id.empty() || st.state == state::plugged) {
                  // update state and source_id
          } else if (auto id = to_wxstring(st.source_id); id != cur_id) {
@@ -15519,24 +16040,13 @@ index 751bd661..98fc6efe 100644
                  return;
          }
  
-@@ -620,23 +1186,39 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -620,23 +1523,28 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          auto [dc, flags] = make_device_columns(st);
          wxASSERT(flags);
  
-+        // 状态列"折叠+瞬时抑制":驱动在连接建立/后台自动重连时会快速发出
-+        // connecting/connected/plugged 等中间状态,若全部写列会让状态"跳来跳去"
-+        // (而实际 USB 会话并未断开)。折叠策略:
-+        //   connecting/unplugging → 不落列(保留上一行显示,避免闪烁)
-+        //   connected            → 与 plugged 一样按"已连接"显示
-+        //   disconnected         → 按"未连接(unplugged)"显示
-+        // 界面因此只呈现 未连接 / 已连接 两种稳定观感,真实断线仍会即时反映。
-+        if (st.state == state::connecting || st.state == state::unplugging) {
-+                flags &= ~mkflag(COL_STATE);
-+        } else if (st.state == state::connected) {
-+                dc[COL_STATE] = wxString::FromAscii(vhci::get_state_str(state::plugged));
-+        } else if (st.state == state::disconnected) {
-+                dc[COL_STATE] = wxString::FromAscii(vhci::get_state_str(state::unplugged));
-+        }
++        // Use the same display mapping for events, refresh, double-click and
++        // summary. Keep transitional states explicit instead of a stale connected label.
++        dc[COL_STATE] = to_string(st.state);
 +
          if (auto &port = dc[COL_PORT]; !port.empty() && is_port_residual(st.state)) {
                  port.clear();
@@ -15564,7 +16074,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_has_devices_update_ui(wxUpdateUIEvent &event)
-@@ -669,11 +1251,11 @@ void MainFrame::on_copy_rows(wxCommandEvent&)
+@@ -669,11 +1577,11 @@ void MainFrame::on_copy_rows(wxCommandEvent&)
          wxLogVerbose(rows);
  
          if (wxClipboardLocker lck; !lck) {
@@ -15578,7 +16088,7 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -714,7 +1296,7 @@ void MainFrame::edit_column_dlg(
+@@ -714,7 +1622,7 @@ void MainFrame::edit_column_dlg(
  
          auto &url = tree.GetItemText(server);
          auto &busid = tree.GetItemText(dev);
@@ -15587,7 +16097,7 @@ index 751bd661..98fc6efe 100644
  
          auto &vendor = tree.GetItemText(dev, COL_VENDOR);
          auto &product = tree.GetItemText(dev, COL_PRODUCT);
-@@ -746,7 +1328,7 @@ void MainFrame::edit_column_dlg(
+@@ -746,7 +1654,7 @@ void MainFrame::edit_column_dlg(
  void MainFrame::on_edit_notes(wxCommandEvent&)
  {
          enum { MAXLEN = 256 };
@@ -15596,7 +16106,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_edit_serial(wxCommandEvent&)
-@@ -761,7 +1343,7 @@ void MainFrame::on_edit_serial(wxCommandEvent&)
+@@ -761,7 +1669,7 @@ void MainFrame::on_edit_serial(wxCommandEvent&)
          };
  
          auto maxlen = get_device_serial_maxlen();
@@ -15605,7 +16115,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_edit_gen_serial(wxCommandEvent&)
-@@ -773,18 +1355,18 @@ void MainFrame::on_edit_gen_serial(wxCommandEvent&)
+@@ -773,18 +1681,18 @@ void MainFrame::on_edit_gen_serial(wxCommandEvent&)
          }
  }
  
@@ -15627,7 +16137,7 @@ index 751bd661..98fc6efe 100644
  {
          auto &tree = *m_treeListCtrl;
  
-@@ -792,11 +1374,11 @@ void MainFrame::set_persistent(_In_ wxTreeListItem device, _In_ bool persistent)
+@@ -792,11 +1700,11 @@ void MainFrame::set_persistent(_In_ wxTreeListItem device, _In_ bool persistent)
          wxASSERT(!tree.GetFirstChild(device).IsOk());
  
          wxString val;
@@ -15641,7 +16151,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_log_show_update_ui(wxUpdateUIEvent &event)
-@@ -878,7 +1460,8 @@ void MainFrame::on_close_to_tray(wxCommandEvent &event)
+@@ -878,7 +1786,8 @@ void MainFrame::on_close_to_tray(wxCommandEvent &event)
  }
  
  DWORD MainFrame::attach(
@@ -15651,7 +16161,7 @@ index 751bd661..98fc6efe 100644
  {
          wxString hostname;
          wxString service;
-@@ -894,6 +1477,7 @@ DWORD MainFrame::attach(
+@@ -894,6 +1803,7 @@ DWORD MainFrame::attach(
                          .busid = busid.utf8_string(),
                  },
                  .serial = serial.utf8_string(),
@@ -15659,7 +16169,7 @@ index 751bd661..98fc6efe 100644
                  .once = once
          };
  
-@@ -905,7 +1489,7 @@ DWORD MainFrame::attach(
+@@ -905,7 +1815,7 @@ DWORD MainFrame::attach(
          };
  
          auto msg = wxString::Format(L"%s/%s", url, busid);
@@ -15668,7 +16178,7 @@ index 751bd661..98fc6efe 100644
  
          return err;
  }
-@@ -915,6 +1499,17 @@ void MainFrame::on_attach_once(wxCommandEvent&)
+@@ -915,6 +1825,17 @@ void MainFrame::on_attach_once(wxCommandEvent&)
          attach(true);
  }
  
@@ -15686,7 +16196,7 @@ index 751bd661..98fc6efe 100644
  void MainFrame::attach(_In_ bool once)
  {
          wxLogVerbose(L"%s, once %d", wxString::FromAscii(__func__), once);
-@@ -925,10 +1520,17 @@ void MainFrame::attach(_In_ bool once)
+@@ -925,10 +1846,17 @@ void MainFrame::attach(_In_ bool once)
                  auto &url = tree.GetItemText(server);
                  auto &busid = tree.GetItemText(dev);
                  auto &serial = tree.GetItemText(dev, COL_SERIAL);
@@ -15706,7 +16216,7 @@ index 751bd661..98fc6efe 100644
                                                url, busid, err, GetLastErrorMsg(err));
                          }
                          break;
-@@ -956,13 +1558,13 @@ void MainFrame::on_attach_stop(wxCommandEvent&)
+@@ -956,13 +1884,13 @@ void MainFrame::on_attach_stop(wxCommandEvent&)
                  auto &url = tree.GetItemText(server);
                  auto &busid = tree.GetItemText(dev);
  
@@ -15722,7 +16232,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_attach_stop_all(wxCommandEvent&)
-@@ -971,15 +1573,15 @@ void MainFrame::on_attach_stop_all(wxCommandEvent&)
+@@ -971,15 +1899,15 @@ void MainFrame::on_attach_stop_all(wxCommandEvent&)
  
          if (auto cnt = vhci::stop_attach_attempts(vhci.get(), nullptr); cnt < 0) {
                  auto err = GetLastError();
@@ -15741,7 +16251,7 @@ index 751bd661..98fc6efe 100644
          auto err = ERROR_SUCCESS;
  
          auto f = [&err, port]
-@@ -989,21 +1591,29 @@ DWORD MainFrame::detach(_In_ int port)
+@@ -989,21 +1917,29 @@ DWORD MainFrame::detach(_In_ int port)
                  }
          };
  
@@ -15775,7 +16285,7 @@ index 751bd661..98fc6efe 100644
                                                port, err, GetLastErrorMsg(err));
                          }
                          break;
-@@ -1013,8 +1623,16 @@ void MainFrame::on_detach(wxCommandEvent&)
+@@ -1013,8 +1949,16 @@ void MainFrame::on_detach(wxCommandEvent&)
  
  void MainFrame::on_detach_all(wxCommandEvent&) 
  {
@@ -15793,7 +16303,7 @@ index 751bd661..98fc6efe 100644
                                err, GetLastErrorMsg(err));
          }
  }
-@@ -1081,6 +1699,8 @@ void MainFrame::remove_device(_In_ wxTreeListItem device)
+@@ -1081,6 +2025,8 @@ void MainFrame::remove_device(_In_ wxTreeListItem device)
          if (auto child = tree.GetFirstChild(server); !child.IsOk()) { // has no children
                  tree.DeleteItem(server);
          }
@@ -15802,7 +16312,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::update_device(_In_ wxTreeListItem device, _In_ const device_columns &dc, _In_ unsigned int flags)
-@@ -1102,6 +1722,8 @@ void MainFrame::update_device(_In_ wxTreeListItem device, _In_ const device_colu
+@@ -1102,6 +2048,8 @@ void MainFrame::update_device(_In_ wxTreeListItem device, _In_ const device_colu
                          tree.SetItemText(device, col, new_val);
                  }
          }
@@ -15811,7 +16321,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_help_about(wxCommandEvent&)
-@@ -1115,7 +1737,7 @@ void MainFrame::on_help_about(wxCommandEvent&)
+@@ -1115,7 +2063,7 @@ void MainFrame::on_help_about(wxCommandEvent&)
          d.SetCopyright(wx_string(v.GetLegalCopyright()));
  
          d.AddDeveloper(L"Vadym Hrynchyshyn\t<vadimgrn@gmail.com>");
@@ -15820,7 +16330,7 @@ index 751bd661..98fc6efe 100644
  
          d.SetLicence(load_license());
          //d.SetIcon();
-@@ -1137,7 +1759,7 @@ auto MainFrame::connect(
+@@ -1137,7 +2085,7 @@ auto MainFrame::connect(
          };
  
          auto msg = wxString::Format(L"%s:%s", hostname, service);
@@ -15829,7 +16339,7 @@ index 751bd661..98fc6efe 100644
  
          switch (err) {
          case ERROR_SUCCESS:
-@@ -1145,7 +1767,11 @@ auto MainFrame::connect(
+@@ -1145,7 +2093,11 @@ auto MainFrame::connect(
          case ERROR_CANCELLED:
                  break;
          default:
@@ -15842,7 +16352,7 @@ index 751bd661..98fc6efe 100644
          }
  
          return sock;
-@@ -1164,6 +1790,8 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
+@@ -1164,6 +2116,8 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
          auto port = wxString::Format(L"%d", m_spinCtrlPort->GetValue());
          wxLogVerbose(L"%s, host='%s', port='%s'", wxString::FromAscii(__func__), host, port);
  
@@ -15851,7 +16361,7 @@ index 751bd661..98fc6efe 100644
          auto u8_host = host.utf8_string();
          auto u8_port = port.utf8_string();
  
-@@ -1180,23 +1808,36 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
+@@ -1180,23 +2134,36 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
                  device_state state {
                          .device = make_imported_device(std::move(host), std::move(port), device),
                  };
@@ -15895,7 +16405,7 @@ index 751bd661..98fc6efe 100644
          } else if (cb.FindString(host) != wxNOT_FOUND) {
                  // already exists
          } else if (auto pos = cb.Append(host); cb.GetCount() > 32) {
-@@ -1206,13 +1847,19 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
+@@ -1206,13 +2173,19 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
  
  void MainFrame::set_menu_columns_labels()
  {
@@ -15917,7 +16427,7 @@ index 751bd661..98fc6efe 100644
  
          for (auto pos = 0; pos < cnt; ++pos) {
                  auto col = view.GetColumn(pos);
-@@ -1234,7 +1881,7 @@ wxDataViewColumn* MainFrame::find_column(_In_ const wxString &title) const noexc
+@@ -1234,7 +2207,7 @@ wxDataViewColumn* MainFrame::find_column(_In_ const wxString &title) const noexc
                  }
          }
  
@@ -15926,7 +16436,7 @@ index 751bd661..98fc6efe 100644
          return nullptr;
  }
  
-@@ -1245,7 +1892,7 @@ wxDataViewColumn* MainFrame::find_column(_In_ int item_id) const noexcept
+@@ -1245,7 +2218,7 @@ wxDataViewColumn* MainFrame::find_column(_In_ int item_id) const noexcept
                  return find_column(title);
          }
  
@@ -15935,7 +16445,28 @@ index 751bd661..98fc6efe 100644
          return nullptr;
  }
  
-@@ -1301,11 +1948,24 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
+@@ -1261,6 +2234,8 @@ void MainFrame::on_view_column(wxCommandEvent &event)
+         if (auto id = event.GetId(); auto col = find_column(id)) {
+                 bool checked = event.GetInt();
+                 col->SetHidden(!checked);
++                fit_visible_columns();
++                wxPersistenceManager::Get().Save(m_treeListCtrl->GetDataView());
+         }
+ }
+ 
+@@ -1288,6 +2263,11 @@ void MainFrame::on_view_labels(wxCommandEvent &)
+         auto &tb = *m_auiToolBar;
+         tb.ToggleWindowStyle(wxAUI_TB_TEXT);
+         tb.Refresh(false);
++        if (m_primary_bar) {
++                m_primary_bar->ToggleWindowStyle(wxAUI_TB_TEXT);
++                m_primary_bar->Realize();
++                m_mgr.Update();
++        }
+ }
+ 
+ int MainFrame::get_port(_In_ wxTreeListItem dev) const
+@@ -1301,11 +2281,24 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
          return str.ToInt(&port) ? port : 0;
  }
  
@@ -15963,7 +16494,7 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -1334,7 +1994,7 @@ void MainFrame::save(_In_ const wxTreeListItems &devices)
+@@ -1334,7 +2327,7 @@ void MainFrame::save(_In_ const wxTreeListItems &devices)
                          cfg.Write(key, value);
                  }
  
@@ -15972,7 +16503,7 @@ index 751bd661..98fc6efe 100644
                          persistent.emplace_back(make_persistent_device(tree, server, dev));
                  }
  
-@@ -1344,11 +2004,11 @@ void MainFrame::save(_In_ const wxTreeListItems &devices)
+@@ -1344,11 +2337,11 @@ void MainFrame::save(_In_ const wxTreeListItems &devices)
          cfg.Flush();
          cfg.SetPath(path);
  
@@ -15986,7 +16517,7 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -1361,7 +2021,7 @@ void MainFrame::on_save(wxCommandEvent&)
+@@ -1361,7 +2354,7 @@ void MainFrame::on_save(wxCommandEvent&)
  void MainFrame::on_save_selected(wxCommandEvent&)
  {
          if (auto devices = get_selected_devices(*m_treeListCtrl); devices.empty()) {
@@ -15995,7 +16526,7 @@ index 751bd661..98fc6efe 100644
          } else {
                  save(devices);
          }
-@@ -1385,7 +2045,7 @@ void MainFrame::on_load(wxCommandEvent&)
+@@ -1385,7 +2378,7 @@ void MainFrame::on_load(wxCommandEvent&)
                  auto [dev, added] = find_or_add_device(dc);
  
                  if (!(added || is_empty(*m_treeListCtrl, dev))) {
@@ -16004,7 +16535,7 @@ index 751bd661..98fc6efe 100644
                          continue;
                  }
  
-@@ -1393,13 +2053,13 @@ void MainFrame::on_load(wxCommandEvent&)
+@@ -1393,13 +2386,13 @@ void MainFrame::on_load(wxCommandEvent&)
                  static_assert(!(get_saved_flags() & state_flag));
  
                  dc[COL_STATE] = to_string(state::unplugged);
@@ -16020,7 +16551,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::on_reload(wxCommandEvent &event)
-@@ -1408,13 +2068,14 @@ void MainFrame::on_reload(wxCommandEvent &event)
+@@ -1408,13 +2401,14 @@ void MainFrame::on_reload(wxCommandEvent &event)
  
          auto &tree = *m_treeListCtrl;
          tree.DeleteAllItems();
@@ -16036,7 +16567,7 @@ index 751bd661..98fc6efe 100644
                  return;
          }
  
-@@ -1430,8 +2091,10 @@ void MainFrame::on_reload(wxCommandEvent &event)
+@@ -1430,8 +2424,10 @@ void MainFrame::on_reload(wxCommandEvent &event)
                          .state = state::plugged 
                  };
  
@@ -16049,7 +16580,7 @@ index 751bd661..98fc6efe 100644
  
                  update_device(item, dc, flags);
          }
-@@ -1440,6 +2103,15 @@ void MainFrame::on_reload(wxCommandEvent &event)
+@@ -1440,6 +2436,15 @@ void MainFrame::on_reload(wxCommandEvent &event)
                  once = true;
                  on_load(event);
          }
@@ -16065,7 +16596,7 @@ index 751bd661..98fc6efe 100644
  }
  
  std::unique_ptr<wxMenu> MainFrame::create_menu(_In_ const menu_item_descr *items, _In_ int cnt)
-@@ -1448,7 +2120,9 @@ std::unique_ptr<wxMenu> MainFrame::create_menu(_In_ const menu_item_descr *items
+@@ -1448,7 +2453,9 @@ std::unique_ptr<wxMenu> MainFrame::create_menu(_In_ const menu_item_descr *items
  
          for (int i = 0; i < cnt; ++i) {
                  if (auto [id, src, handler] = items[i]; clone_menu_item(*menu, id, *src)) {
@@ -16076,7 +16607,7 @@ index 751bd661..98fc6efe 100644
                  }
          }
  
-@@ -1462,22 +2136,14 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
+@@ -1462,22 +2469,14 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
          const auto items = std::to_array<menu_item_descr>({
                  { wxID_SELECTALL, m_menu_edit, &MainFrame::on_select_all },
                  { wxID_COPY, m_menu_edit, &MainFrame::on_copy_rows },
@@ -16103,7 +16634,7 @@ index 751bd661..98fc6efe 100644
          });
  
          return create_menu(items.data(), items.size());
-@@ -1497,7 +2163,7 @@ void MainFrame::on_item_context_menu(wxTreeListEvent&)
+@@ -1497,7 +2496,7 @@ void MainFrame::on_item_context_menu(wxTreeListEvent&)
   */
  void MainFrame::on_view_reset(wxCommandEvent&)
  {
@@ -16112,7 +16643,7 @@ index 751bd661..98fc6efe 100644
                  wxOK | wxCANCEL | wxCANCEL_DEFAULT | wxICON_WARNING | wxCENTRE);
  
          if (dlg.ShowModal() == wxID_CANCEL) {
-@@ -1512,7 +2178,7 @@ void MainFrame::on_view_reset(wxCommandEvent&)
+@@ -1512,7 +2511,7 @@ void MainFrame::on_view_reset(wxCommandEvent&)
          switch (wxExecute(argv)) {
          case 0: // the command could not be executed
          case -1: // can happen when using DDE under Windows for command execution
@@ -16121,7 +16652,7 @@ index 751bd661..98fc6efe 100644
                  break;
          default:
                  post_exit();
-@@ -1557,7 +2223,7 @@ void MainFrame::on_view_appearance(wxCommandEvent &event)
+@@ -1557,7 +2556,7 @@ void MainFrame::on_view_appearance(wxCommandEvent &event)
          auto val = get_appearance_value(event.GetId());
          wxGetApp().write_appearance(val);
  
@@ -16130,7 +16661,7 @@ index 751bd661..98fc6efe 100644
  }
  
  void MainFrame::set_status_text(
-@@ -1571,7 +2237,7 @@ void MainFrame::set_status_text(
+@@ -1571,7 +2570,7 @@ void MainFrame::set_status_text(
                  m_statusBar->PushStatusText(text);
                  ++m_status_text_pushes;
          } else {
@@ -16139,7 +16670,7 @@ index 751bd661..98fc6efe 100644
          }
  }
  
-@@ -1583,3 +2249,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
+@@ -1583,3 +2582,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
  
          m_status_text_pushes = 0;
  }
@@ -16289,7 +16820,7 @@ index ef162a79..2eabbd09 100644
            <property name="alignment">wxALIGN_CENTER</property>
            <property name="flag">wxCOL_HIDDEN</property>
 diff --git a/userspace/wusbip/wusbip.h b/userspace/wusbip/wusbip.h
-index 93546edd..fa3ccca3 100644
+index 93546edd..b9b7f5f6 100644
 --- a/userspace/wusbip/wusbip.h
 +++ b/userspace/wusbip/wusbip.h
 @@ -7,16 +7,20 @@
@@ -16313,7 +16844,16 @@ index 93546edd..fa3ccca3 100644
  
  class DeviceStateEvent;
  wxDECLARE_EVENT(EVT_DEVICE_STATE, DeviceStateEvent);
-@@ -43,8 +47,32 @@ private:
+@@ -30,6 +34,8 @@ public:
+ 
+ 	auto start_in_tray() const noexcept { return m_start_in_tray; }
+ 	void iconize_to_tray();
++        void show_initial_window();
++        void fit_visible_columns();
+ 
+ 	void on_exit(wxCommandEvent &event) override;
+ 	void on_detach_all(wxCommandEvent &event) override;
+@@ -43,8 +49,38 @@ private:
  
          enum { IMG_SERVER, IMG_DEVICE, IMG_CNT };
  
@@ -16329,6 +16869,12 @@ index 93546edd..fa3ccca3 100644
 +
  	bool m_start_in_tray{};
  	bool m_close_to_tray{};
++        bool m_in_tray{}; // 用户主动收起;不能由启动布局逻辑取消
++        bool m_restoring_window{true};
++        bool m_fitting_columns{};
++        bool m_auto_fit_columns{true};
++        bool m_column_fit_pending{};
++        wxAuiToolBar* m_primary_bar{};
 +	bool m_auto_connect{true};
 +	bool m_auto_connecting{};
 +
@@ -16346,7 +16892,7 @@ index 93546edd..fa3ccca3 100644
  
          LogWindow *m_log{};
  	TreeListItemComparator m_tree_cmp;
-@@ -57,11 +85,14 @@ private:
+@@ -57,11 +93,14 @@ private:
  	std::thread m_read_thread{ &MainFrame::read_loop, this };
  
          int m_status_text_pushes{};
@@ -16362,7 +16908,7 @@ index 93546edd..fa3ccca3 100644
          void on_attach_stop_all(wxCommandEvent &event) override;
          void on_detach(wxCommandEvent &event) override;
          void on_reload(wxCommandEvent &event) override;
-@@ -71,7 +102,8 @@ private:
+@@ -71,7 +110,8 @@ private:
  	void on_has_devices_update_ui(wxUpdateUIEvent &event) override;
  	void on_has_selected_devices_update_ui(wxUpdateUIEvent &event) override;
          void on_has_any_selected_devices_update_ui(wxUpdateUIEvent &event) override;
@@ -16372,7 +16918,7 @@ index 93546edd..fa3ccca3 100644
  	void on_item_context_menu(wxTreeListEvent &event) override;
  	void on_view_reset(wxCommandEvent &event) override;
  	void on_help_about_lib(wxCommandEvent&) override;
-@@ -124,6 +156,8 @@ private:
+@@ -124,6 +164,8 @@ private:
  
  	void on_view_appearance(wxCommandEvent &event) override;
  	void on_status_bar_timer(wxTimerEvent&);
@@ -16381,16 +16927,15 @@ index 93546edd..fa3ccca3 100644
  
          void edit_column_dlg(
                  _In_ const wxString &title, _In_ usbip::column_pos_t col, _In_ int maxlen,
-@@ -131,8 +165,40 @@ private:
- 
+@@ -132,8 +174,42 @@ private:
  	void init();
  	void check_view_appearance(_In_ int appearance);
--	void init_tree_list();
--	void restore_state();
-+        void init_tree_list();
-+        void apply_theme();
-+        void restore_state();
-+
+ 	void init_tree_list();
++	void apply_theme();
++        void configure_workspace_ui();
++	void apply_compact_columns();
+ 	void restore_state();
+ 
 +	/*
 +	 * 恢复上次保存的窗口几何之后,把主窗口拉回可视工作区并确保它是"显示"而非
 +	 * "最小化到托盘"。详见 wusbip.cpp 里的实现注释。
@@ -16421,10 +16966,11 @@ index 93546edd..fa3ccca3 100644
 +	void mgmt_on_enable(wxCommandEvent &event);
 +	void mgmt_apply_event(wxThreadEvent &event);
 +	void mgmt_loop();
- 
++
  	void read_loop();
  	void break_read_loop();
-@@ -145,15 +211,19 @@ private:
+ 
+@@ -145,15 +221,19 @@ private:
  
  	void remove_device(_In_ wxTreeListItem dev);
  
@@ -16450,7 +16996,7 @@ index 93546edd..fa3ccca3 100644
  	void update_device(_In_ wxTreeListItem device, _In_ const usbip::device_columns &dc, _In_ unsigned int flags);
  	
 diff --git a/userspace/wusbip/wusbip.rc b/userspace/wusbip/wusbip.rc
-index a71bb762..e67baa9f 100644
+index a71bb762..8a1b62e6 100644
 --- a/userspace/wusbip/wusbip.rc
 +++ b/userspace/wusbip/wusbip.rc
 @@ -11,6 +11,13 @@
@@ -16484,7 +17030,7 @@ index a71bb762..e67baa9f 100644
              VALUE "CompanyName", "usbip-win2"
 -            VALUE "FileDescription", "USBip"
 -            VALUE "FileVersion", "0.9.7.8"
-+            VALUE "FileDescription", "USB-IP 中文客户端"
++            VALUE "FileDescription", "USB-SHARE Client"
 +            VALUE "FileVersion", "0.9.8.0"
              VALUE "InternalName", "wusbip.exe"
              VALUE "LegalCopyright", "Copyright (c) 2022-2026 Vadym Hrynchyshyn <vadimgrn@gmail.com>"
@@ -16509,7 +17055,7 @@ index a71bb762..e67baa9f 100644
  /////////////////////////////////////////////////////////////////////////////
  #endif    // not APSTUDIO_INVOKED
 diff --git a/userspace/wusbip/wusbip.vcxproj b/userspace/wusbip/wusbip.vcxproj
-index f11d119a..feae5590 100644
+index f11d119a..6c8f0fcb 100644
 --- a/userspace/wusbip/wusbip.vcxproj
 +++ b/userspace/wusbip/wusbip.vcxproj
 @@ -76,6 +76,7 @@
@@ -16582,7 +17128,7 @@ index f11d119a..feae5590 100644
        <SubSystem>Windows</SubSystem>
        <GenerateDebugInformation>true</GenerateDebugInformation>
 -      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33ud_aui.lib;wxmsw33ud_adv.lib;wxmsw33ud_xrc.lib;wxmsw33ud_core.lib;wxbase33ud_xml.lib;wxbase33ud.lib;nanosvg.lib;nanosvgrast.lib;libpng16d.lib;zsd.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;winhttp.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33ud_aui.lib;wxmsw33ud_adv.lib;wxmsw33ud_xrc.lib;wxmsw33ud_core.lib;wxbase33ud_xml.lib;wxbase33ud.lib;nanosvg.lib;nanosvgrast.lib;libpng16d.lib;zsd.lib;%(AdditionalDependencies)</AdditionalDependencies>
      </Link>
      <PreBuildEvent>
        <Command>
@@ -16600,7 +17146,7 @@ index f11d119a..feae5590 100644
        <SubSystem>Windows</SubSystem>
        <GenerateDebugInformation>true</GenerateDebugInformation>
 -      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33ud_aui.lib;wxmsw33ud_adv.lib;wxmsw33ud_xrc.lib;wxmsw33ud_core.lib;wxbase33ud_xml.lib;wxbase33ud.lib;nanosvg.lib;nanosvgrast.lib;libpng16d.lib;zsd.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;winhttp.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33ud_aui.lib;wxmsw33ud_adv.lib;wxmsw33ud_xrc.lib;wxmsw33ud_core.lib;wxbase33ud_xml.lib;wxbase33ud.lib;nanosvg.lib;nanosvgrast.lib;libpng16d.lib;zsd.lib;%(AdditionalDependencies)</AdditionalDependencies>
      </Link>
      <PreBuildEvent>
        <Command>
@@ -16618,7 +17164,7 @@ index f11d119a..feae5590 100644
        <OptimizeReferences>true</OptimizeReferences>
        <GenerateDebugInformation>true</GenerateDebugInformation>
 -      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33u_aui.lib;wxmsw33u_adv.lib;wxmsw33u_xrc.lib;wxmsw33u_core.lib;wxbase33u_xml.lib;wxbase33u.lib;nanosvg.lib;nanosvgrast.lib;libpng16.lib;zs.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;winhttp.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33u_aui.lib;wxmsw33u_adv.lib;wxmsw33u_xrc.lib;wxmsw33u_core.lib;wxbase33u_xml.lib;wxbase33u.lib;nanosvg.lib;nanosvgrast.lib;libpng16.lib;zs.lib;%(AdditionalDependencies)</AdditionalDependencies>
      </Link>
      <PreBuildEvent>
        <Command>
@@ -16636,7 +17182,7 @@ index f11d119a..feae5590 100644
        <OptimizeReferences>true</OptimizeReferences>
        <GenerateDebugInformation>true</GenerateDebugInformation>
 -      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-+      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33u_aui.lib;wxmsw33u_adv.lib;wxmsw33u_xrc.lib;wxmsw33u_core.lib;wxbase33u_xml.lib;wxbase33u.lib;nanosvg.lib;nanosvgrast.lib;libpng16.lib;zs.lib;%(AdditionalDependencies)</AdditionalDependencies>
++      <AdditionalDependencies>Rpcrt4.lib;Comctl32.lib;shlwapi.lib;setupapi.lib;advapi32.lib;ws2_32.lib;winhttp.lib;wintrust.lib;crypt32.lib;newdev.lib;CfgMgr32.lib;wxmsw33u_aui.lib;wxmsw33u_adv.lib;wxmsw33u_xrc.lib;wxmsw33u_core.lib;wxbase33u_xml.lib;wxbase33u.lib;nanosvg.lib;nanosvgrast.lib;libpng16.lib;zs.lib;%(AdditionalDependencies)</AdditionalDependencies>
      </Link>
      <PreBuildEvent>
        <Command>
