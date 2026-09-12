@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -500,6 +501,17 @@ def forget_managed(busid: str) -> None:
     write_managed(values)
 
 
+def valid_public_ip(value: object) -> str:
+    """Display-only client claim; never use this value for authentication."""
+    if not isinstance(value, str) or len(value) > 64 or "%" in value:
+        return ""
+    try:
+        ip = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return ""
+    return str(ip) if ip.is_global and not ip.is_multicast else ""
+
+
 def read_clients() -> list[dict[str, object]]:
     raw = read_json_file(CLIENTS_FILE, {})
     records = raw.get("clients", {}) if isinstance(raw, dict) else {}
@@ -534,6 +546,7 @@ def read_clients() -> list[dict[str, object]]:
                 "clientId": client_id,
                 "name": str(record.get("name", "未命名客户端"))[:80],
                 "address": str(record.get("address", ""))[:80],
+                "publicIp": valid_public_ip(record.get("publicIp")),
                 "dataPort": data_port,
                 "busids": [str(item) for item in busids if isinstance(item, str) and SAFE_BUSID_RE.fullmatch(item)],
                 "lastSeen": int(last_seen),
@@ -575,7 +588,8 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
     record: dict[str, object] = {
         "clientId": client_id[:128],
         "name": name.strip()[:80],
-        "address": address[:80],
+        "address": address[:80],  # Observed peer; do not replace with an untrusted claim.
+        "publicIp": valid_public_ip(payload.get("publicIp")),
         "dataPort": data_port,
         "busids": valid_busids,
         "lastSeen": int(time.time()),
@@ -602,6 +616,7 @@ def connection_info(busid: str) -> list[dict[str, object]]:
                     "clientId": client.get("clientId", ""),
                     "name": client.get("name", "未命名客户端"),
                     "address": client.get("address", ""),
+                    "publicIp": client.get("publicIp", ""),
                     "dataPort": client.get("dataPort", configured_port()),
                     "lastSeen": client.get("lastSeen", 0),
                 }

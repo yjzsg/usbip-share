@@ -87,7 +87,33 @@
     .editor { width: min(600px, 100%); padding: 22px; }
     .editor h2 { margin: 0 0 16px; font-size: 19px; }
     .editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    [hidden] { display: none !important; }
+    :focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; }
+    .notice-icon { flex: 0 0 24px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; color: #b54708; font-weight: 700; }
+    .overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 22px; }
+    .metric { padding: 22px 24px; display: flex; flex-direction: column; gap: 6px; }
+    .metric span { color: var(--muted); font-weight: 500; }
+    .metric strong { font-size: 32px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .metric small { color: var(--muted); }
+    .filters { padding: 16px 18px; display: flex; align-items: flex-end; gap: 14px; border-bottom: 1px solid var(--line); }
+    .search-field { flex: 1 1 320px; max-width: 460px; }
+    .filter-field { flex: 0 0 150px; }
+    .filters label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .filters input, .filters select { width: 100%; min-height: 39px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); color: var(--text); font: inherit; }
+    .auto-refresh { margin-left: auto; padding-bottom: 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .error-banner { margin-bottom: 18px; padding: 12px 16px; display: flex; gap: 16px; align-items: center; justify-content: space-between; color: var(--red); border-color: #f4c4be; }
+    .feedback { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px); padding: 12px 20px; border-radius: 10px; color: white; background: var(--text); box-shadow: var(--shadow); }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } button:hover { transform: none; } }
+    @media (max-width: 900px) { .filters { flex-wrap: wrap; } .auto-refresh { width: 100%; margin-left: 0; padding-bottom: 0; } }
     @media (max-width: 650px) {
+      .overview { gap: 9px; }
+      .metric { padding: 15px 12px; }
+      .metric strong { font-size: 28px; }
+      .metric small { font-size: 11px; }
+      .search-field { max-width: none; }
+      .filter-field { flex: 1; }
+      .error-banner { align-items: flex-start; }
+      .wrap { padding-top: 20px; }
       .top { align-items: flex-start; flex-direction: column; }
       h1 { font-size: 21px; }
       .toolbar { align-items: flex-start; flex-direction: column; }
@@ -112,14 +138,25 @@
     </header>
 
     <section class="card notice warn">
-      <div>⚠️</div>
+      <div class="notice-icon" aria-hidden="true">!</div>
       <div>
         <strong>只在可信内网使用</strong>
         <p>USB/IP 默认没有加密和账号认证。请在防火墙中限制访问来源，不要把服务端口暴露到公网。</p>
       </div>
     </section>
 
-    <section class="card">
+    <section class="overview" aria-label="设备概览">
+      <div class="card metric"><span>设备总数</span><strong id="totalCount">—</strong><small>本机检测到的 USB 设备</small></div>
+      <div class="card metric"><span>正在共享</span><strong id="sharedCount">—</strong><small>已开放远程连接</small></div>
+      <div class="card metric"><span>已登记连接</span><strong id="connectedCount">—</strong><small>有客户端在线登记的设备</small></div>
+    </section>
+
+    <div id="errorBanner" class="card error-banner" role="alert" hidden>
+      <span id="errorText"></span><button class="secondary" id="retryBtn">重试连接</button>
+    </div>
+    <p id="feedback" class="feedback" role="status" hidden></p>
+
+    <section class="card devices-card">
       <div class="toolbar">
         <div class="toolbar-left">
           <strong>本机 USB 设备</strong>
@@ -128,7 +165,24 @@
         </div>
         <span id="updated" class="count"></span>
       </div>
-      <div id="content" class="table-wrap">
+      <div class="filters">
+        <div class="search-field">
+          <label for="deviceSearch">搜索设备</label>
+          <input id="deviceSearch" type="search" placeholder="名称、备注、Bus ID 或连接方" autocomplete="off">
+        </div>
+        <div class="filter-field">
+          <label for="statusFilter">设备状态</label>
+          <select id="statusFilter">
+            <option value="all">全部状态</option>
+            <option value="shared">已共享</option>
+            <option value="unshared">未共享</option>
+            <option value="connected">已登记连接</option>
+          </select>
+        </div>
+        <button id="clearFilters" class="secondary" hidden>清除筛选</button>
+        <span class="auto-refresh">每 10 秒自动更新 · 编辑时暂停</span>
+      </div>
+      <div id="content" class="table-wrap" tabindex="0" aria-label="USB 设备列表">
         <div class="empty">正在读取 USB 设备…</div>
       </div>
     </section>
@@ -203,6 +257,18 @@
     const aliasInput = document.getElementById('aliasInput');
     const remarkInput = document.getElementById('remarkInput');
     let editingBusId = '';
+    let currentDevices = [];
+    let hasDevices = false;
+    let loadingDevices = false;
+    let checkingSession = false;
+    let sessionReady = false;
+    let pendingRefresh = false;
+    let renderedHtml = '';
+    let flashTimer;
+    const content = document.getElementById('content');
+    const searchInput = document.getElementById('deviceSearch');
+    const statusFilter = document.getElementById('statusFilter');
+    const refreshButton = document.getElementById('refreshTop');
 
     document.getElementById('loginBtn').onclick = doLogin;
     document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
@@ -212,18 +278,42 @@
       token = ''; localStorage.removeItem(TOKEN_KEY);
       window.location.reload();
     };
-    document.getElementById('refreshTop').onclick = loadDevices;
-    document.getElementById('cancelEdit').onclick = () => { editorModal.hidden = true; };
-    editorModal.onclick = e => { if (e.target === editorModal) editorModal.hidden = true; };
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') { editorModal.hidden = true; } });
+    refreshButton.onclick = () => sessionReady ? loadDevices() : bootstrap();
+    document.getElementById('retryBtn').onclick = () => sessionReady ? loadDevices() : bootstrap();
+    document.getElementById('cancelEdit').onclick = closeEditor;
+    editorModal.onclick = e => { if (e.target === editorModal) closeEditor(); };
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeEditor(); });
     document.getElementById('saveEdit').onclick = saveMetadata;
+    searchInput.addEventListener('input', () => renderDevices(currentDevices));
+    statusFilter.addEventListener('change', () => renderDevices(currentDevices));
+    document.getElementById('clearFilters').onclick = () => {
+      searchInput.value = '';
+      statusFilter.value = 'all';
+      renderDevices(currentDevices);
+    };
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
     }
     function flash(message) {
-      document.getElementById('updated').textContent = message;
-      setTimeout(() => { document.getElementById('updated').textContent = ''; }, 2600);
+      const feedback = document.getElementById('feedback');
+      clearTimeout(flashTimer);
+      feedback.textContent = message;
+      feedback.hidden = false;
+      flashTimer = setTimeout(() => { feedback.hidden = true; }, 3500);
+    }
+    function setError(message) {
+      document.getElementById('errorBanner').hidden = !message;
+      document.getElementById('errorText').textContent = message;
+    }
+    function expireSession() {
+      token = '';
+      sessionReady = false;
+      localStorage.removeItem(TOKEN_KEY);
+      changeModal.hidden = true;
+      editorModal.hidden = true;
+      editingBusId = '';
+      showLogin();
     }
     function apiHeaders() {
       const headers = {'Accept': 'application/json'};
@@ -253,6 +343,8 @@
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || '登录失败');
         token = data.token;
+        sessionReady = true;
+        setError('');
         mustChange = Boolean(data.mustChange);
         localStorage.setItem(TOKEN_KEY, token);
         loginModal.hidden = true;
@@ -290,22 +382,43 @@
         button.disabled = false;
       }
     }
-    async function loadDevices() {
+    async function loadDevices({force = false} = {}) {
       if (!token) { showLogin(); return; }
-      const content = document.getElementById('content');
-      content.innerHTML = '<div class="empty">正在读取 USB 设备…</div>';
+      if (!sessionReady) { await bootstrap(); return; }
+      if (loadingDevices) { if (force) pendingRefresh = true; return; }
+      if (!editorModal.hidden || !changeModal.hidden) return;
+      loadingDevices = true;
+      refreshButton.disabled = true;
+      refreshButton.textContent = '正在刷新…';
+      const requestToken = token;
       try {
         const response = await fetch('/api/devices', {cache: 'no-store', headers: apiHeaders()});
-        if (response.status === 401) { showLogin(); return; }
+        if (requestToken !== token) return;
+        if (response.status === 401) { expireSession(); return; }
         const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || '读取设备失败');
+        if (requestToken !== token) return;
+        if (!response.ok || !data.ok || !Array.isArray(data.devices)) throw new Error(data.error || '读取设备失败');
         document.getElementById('port').textContent = data.usbipPort;
-        document.getElementById('count').textContent = `共 ${data.devices.length} 个`;
-        renderDevices(data.devices);
-        document.getElementById('updated').textContent = '刚刚更新';
+        currentDevices = data.devices;
+        hasDevices = true;
+        renderDevices(currentDevices);
+        document.getElementById('updated').textContent = '最近更新 ' + new Date().toLocaleTimeString('zh-CN', {hour12: false});
+        setError('');
       } catch (error) {
-        document.getElementById('count').textContent = '';
-        content.innerHTML = `<div class="error">${escapeHtml(error.message)}<br><br><button class="secondary" onclick="loadDevices()">重试</button></div>`;
+        if (requestToken !== token) return;
+        setError((hasDevices ? '刷新失败，已保留上次设备列表。' : '暂时无法读取设备。') + error.message);
+        if (!hasDevices) {
+          document.getElementById('count').textContent = '等待连接';
+          content.innerHTML = '<div class="empty">尚未载入设备，请重试连接。</div>';
+        }
+      } finally {
+        loadingDevices = false;
+        refreshButton.disabled = false;
+        refreshButton.textContent = '刷新设备';
+        if (pendingRefresh) {
+          pendingRefresh = false;
+          await loadDevices();
+        }
       }
     }
     function connectionSummary(connections) {
@@ -313,16 +426,38 @@
       return connections.map(connection => {
         const name = escapeHtml(connection.name || '未命名客户端');
         const address = escapeHtml(connection.address || '地址未知');
-        return `<div class="owner"><strong>${name}</strong><small>${address}</small></div>`;
+        // 客户端上报的公网 IP(若它没能查到,则只显示服务端看到的来源地址)。
+        const publicIp = escapeHtml(connection.publicIp || '');
+        const ipLine = publicIp && publicIp !== address ? `<small>公网 ${publicIp}</small>` : '';
+        return `<div class="owner"><strong>${name}</strong><small>${address}</small>${ipLine}</div>`;
       }).join('');
     }
     function renderDevices(devices) {
-      const content = document.getElementById('content');
-      if (!devices.length) {
-        content.innerHTML = '<div class="empty">没有发现 USB 设备。请确认设备已插入，并检查容器的 USB 映射。</div>';
+      if (!editorModal.hidden || !changeModal.hidden || !hasDevices) return;
+      const connectedCount = devices.filter(device => device.connections && device.connections.length).length;
+      document.getElementById('totalCount').textContent = devices.length;
+      document.getElementById('sharedCount').textContent = devices.filter(device => device.shared).length;
+      document.getElementById('connectedCount').textContent = connectedCount;
+      const query = searchInput.value.trim().toLocaleLowerCase();
+      const filter = statusFilter.value;
+      const visibleDevices = devices.filter(device => {
+        const connected = Boolean(device.connections && device.connections.length);
+        if (filter === 'shared' && !device.shared) return false;
+        if (filter === 'unshared' && device.shared) return false;
+        if (filter === 'connected' && !connected) return false;
+        const owners = (device.connections || []).flatMap(connection => [connection.name, connection.address]);
+        return [device.alias, device.description, device.remark, device.busid, device.vidpid, device.bindingLabel, ...owners]
+          .join(' ').toLocaleLowerCase().includes(query);
+      });
+      document.getElementById('count').textContent = `显示 ${visibleDevices.length} / ${devices.length} 个`;
+      document.getElementById('clearFilters').hidden = !query && filter === 'all';
+      if (!visibleDevices.length) {
+        const message = devices.length ? '没有匹配的设备，请调整搜索词或筛选条件。' : '没有发现 USB 设备。请确认设备已插入，并检查容器的 USB 映射。';
+        const html = `<div class="empty">${message}</div>`;
+        if (renderedHtml !== html) { content.innerHTML = html; renderedHtml = html; }
         return;
       }
-      const rows = devices.map(device => {
+      const rows = visibleDevices.map(device => {
         const shared = Boolean(device.shared);
         const kick = shared
           ? `<button class="danger" data-action="kick" data-busid="${escapeHtml(device.busid)}">强制断开连接</button>`
@@ -353,13 +488,25 @@
           <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${escapeHtml(device.busid)}">编辑名称/备注</button>${action}</div></td>
         </tr>`;
       }).join('');
-      content.innerHTML = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>连接方</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const html = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>连接方</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      // 心跳时间戳不参与页面内容比较，未变化时不替换表格，保留焦点和滚动位置。
+      if (renderedHtml === html) return;
+      const scrollLeft = content.scrollLeft;
+      content.innerHTML = html;
+      content.scrollLeft = scrollLeft;
+      renderedHtml = html;
       content.querySelectorAll('button[data-action]').forEach(button => {
         button.onclick = () => {
           if (button.dataset.action === 'edit') openEditor(button.dataset.busid, devices);
           else changeState(button.dataset.busid, button.dataset.action, button);
         };
       });
+    }
+    function closeEditor() {
+      if (document.getElementById('saveEdit').disabled) return;
+      editorModal.hidden = true;
+      editingBusId = '';
+      renderDevices(currentDevices);
     }
     function openEditor(busid, devices) {
       const device = devices.find(item => item.busid === busid);
@@ -382,8 +529,9 @@
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || data.message || '保存失败');
         editorModal.hidden = true;
+        editingBusId = '';
         flash('设备名称和备注已保存');
-        await loadDevices();
+        await loadDevices({force: true});
       } catch (error) {
         alert(error.message);
       } finally {
@@ -400,40 +548,51 @@
         const data = await response.json();
         if (!response.ok || !data.ok) throw new Error(data.error || data.message || '操作失败');
         flash(data.message || '操作成功');
-        await loadDevices();
+        await loadDevices({force: true});
       } catch (error) {
-        button.disabled = false;
         alert(error.message);
+      } finally {
+        button.disabled = false;
       }
     }
     async function bootstrap() {
-      // 登录框只在“登录成功”时被隐藏的旧逻辑，会让带着有效登录态的刷新一直
-      // 把密码框挂在屏幕上。这里改为先问服务端这个令牌是否仍然有效，再决定
-      // 显示设备列表还是登录框。
       if (!token) { showLogin(); return; }
-      let data = null;
+      if (checkingSession) return;
+      checkingSession = true;
+      const requestToken = token;
       try {
         const response = await fetch('/api/session', {cache: 'no-store', headers: apiHeaders()});
-        data = await response.json();
-        if (!response.ok || !data.ok || !data.authorized) data = null;
+        if (requestToken !== token) return;
+        if (response.status === 401) { expireSession(); return; }
+        const data = await response.json();
+        if (requestToken !== token) return;
+        if (!response.ok || !data.ok || typeof data.authorized !== 'boolean') throw new Error('暂时无法验证登录状态');
+        if (!data.authorized) { expireSession(); return; }
+        sessionReady = true;
+        mustChange = Boolean(data.mustChange);
+        loginModal.hidden = true;
+        mainApp.hidden = false;
+        setError('');
+        if (mustChange) showChange(true);
+        await loadDevices();
       } catch (error) {
-        data = null;
+        if (requestToken !== token) return;
+        // 断网、服务端错误或响应损坏不代表令牌失效；保留令牌等待重试。
+        loginModal.hidden = true;
+        mainApp.hidden = false;
+        setError('暂时无法连接服务器，登录信息已保留。请重试。');
+        document.getElementById('count').textContent = '等待连接';
+        if (!hasDevices) content.innerHTML = '<div class="empty">尚未载入设备，请重试连接。</div>';
+      } finally {
+        checkingSession = false;
       }
-      if (!data) {
-        // 令牌过期或被改密码废止：清掉本地令牌，让用户重新登录。
-        token = '';
-        localStorage.removeItem(TOKEN_KEY);
-        showLogin();
-        return;
-      }
-      mustChange = Boolean(data.mustChange);
-      loginModal.hidden = true;
-      mainApp.hidden = false;
-      if (mustChange) showChange(true);
-      await loadDevices();
     }
-    bootstrap().catch(() => showLogin());
-    setInterval(() => { if (!loginModal.hidden) return; if (!changeModal.hidden && mustChange) return; loadDevices(); }, 10000);
+    bootstrap();
+    setInterval(() => {
+      if (document.hidden || !loginModal.hidden || !editorModal.hidden || !changeModal.hidden) return;
+      if (sessionReady) loadDevices();
+      else bootstrap();
+    }, 10000);
   </script>
 </body>
 </html>

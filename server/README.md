@@ -111,16 +111,18 @@ docker compose logs --tail 30
 
 ## 测试
 
-`tests/` 下是四套可直接运行的回归测试（不需要真实 USB 设备）：
+`tests/` 下是五套可直接运行的回归测试（不需要真实 USB 设备）：
 
 ```sh
 python tests/test_metadata_keys.py     # 设备名称键规则（21 项）
 python tests/test_auth_flow.py         # 登录/会话端到端，含模拟容器重启（10 项）
 python tests/test_gateway_split.py     # 单端口分流 + 空闲长会话不被拆断（5 项，约 15s）
-python tests/extract_inline.py && node tests/test_ui_boot.js   # 管理页启动逻辑（10 项）
+python tests/test_public_ip.py         # 心跳里的公网 IP 只接受可全局路由地址（5 项）
+node   tests/test_ui_boot.js           # 管理页：直接抽取 index.html 的内联脚本跑（55 项）
 ```
 
-前两套用临时目录承载状态文件，不会碰真实配置。
+前两套用临时目录承载状态文件，不会碰真实配置；最后一套直接从 `index.html`
+读取真实脚本，不存在"测试跑的是生成物、和页面不同步"的问题。
 
 ## 常见问题
 

@@ -10,8 +10,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-PY = r"C:\Users\Administrator\.workbuddy\binaries\python\versions\3.13.12\python.exe"
-SRV = Path(r"C:\Users\Administrator\Desktop\windows-client\usbip-share\server")
+PY = sys.executable
+SRV = Path(__file__).resolve().parent.parent
 PORT = 18099
 BASE = f"http://127.0.0.1:{PORT}"
 
