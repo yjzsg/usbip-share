@@ -204,23 +204,16 @@ def group_key(device: dict[str, object], index: int) -> str:
     return f"group:{device.get('fingerprint', '')}#{index}"
 
 
-def stable_device_key(device: dict[str, object]) -> str:
-    identity = str(device.get("identity", ""))
-    if identity:
-        return f"identity:{identity}"
-    return f"busid:{device.get('busid', '')}"
-
-
 def legacy_device_key(device: dict[str, object]) -> str:
     vidpid = str(device.get("vidpid", ""))
     description = str(device.get("description", ""))
     return f"device:{vidpid}|{description}"
 
 
-def public_device_key(device: dict[str, object]) -> str:
-    # Do not expose serial numbers or host sysfs paths to clients. The digest
-    # gives clients a stable local-notes key without leaking those identities.
-    return hashlib.sha256(stable_device_key(device).encode("utf-8")).hexdigest()[:32]
+# 说明:曾有一个 public_device_key()/`deviceKey` 字段,原意是给 Windows 客户端做
+# 本地备注的稳定键。核实后确认**两端都没有消费它**(客户端源码无 deviceKey 引用,
+# 管理页也未使用),客户端实际是按 (服务器 URL, Bus ID) 匹配自己的存档记录,
+# 因此这个字段已移除,避免后人误以为它在生效。
 
 
 def read_json_file(path: Path, default: object) -> object:
@@ -666,7 +659,6 @@ def list_devices(include_internal: bool = False) -> tuple[list[dict[str, object]
     metadata = migrate_metadata(devices, fingerprint_counts)
 
     for device in devices:
-        device["deviceKey"] = public_device_key(device)
         group_index = int(device.get("modelIndex", 0))
         record = device_metadata(device, fingerprint_counts, group_index, metadata)
         device["alias"] = record["alias"]
