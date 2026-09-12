@@ -16,7 +16,6 @@ import os
 import socket
 import socketserver
 import threading
-import time
 
 
 def env_int(name: str, default: int) -> int:
@@ -33,17 +32,16 @@ def classify(first_byte: int) -> str:
     return "usbip"
 
 
-def relay(src: socket.socket, dst: socket.socket, tag: str) -> None:
-    """src -> dst 单向转发;本方向读到 EOF/出错时通知对端半关闭。"""
+def relay(src: socket.socket, dst: socket.socket) -> None:
+    """src -> dst 单向转发;本方向读到 EOF(或出错)时通知对端半关闭。"""
     try:
         while True:
             data = src.recv(65536)
             if not data:
-                print(f"[gw-diag] {time.strftime('%H:%M:%S')} EOF {tag}", flush=True)
                 break
             dst.sendall(data)
-    except OSError as exc:
-        print(f"[gw-diag] {time.strftime('%H:%M:%S')} ERR {tag}: {exc}", flush=True)
+    except OSError:
+        pass
     finally:
         try:
             dst.shutdown(socket.SHUT_WR)
@@ -51,7 +49,7 @@ def relay(src: socket.socket, dst: socket.socket, tag: str) -> None:
             pass
 
 
-def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first: bytes, kind: str) -> None:
+def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first: bytes) -> None:
     """把已消费首字节的连接接到 upstream,再双向转发。"""
     up = None
     try:
@@ -69,13 +67,12 @@ def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first:
             client.close()
         return
 
-    t1 = threading.Thread(target=relay, args=(client, up, "client->up"), daemon=True)
-    t2 = threading.Thread(target=relay, args=(up, client, "up->client"), daemon=True)
+    t1 = threading.Thread(target=relay, args=(client, up), daemon=True)
+    t2 = threading.Thread(target=relay, args=(up, client), daemon=True)
     t1.start()
     t2.start()
     t1.join()
     t2.join()
-    print(f"[gw-diag] {time.strftime('%H:%M:%S')} closed conn kind={kind}", flush=True)
     try:
         up.close()
     except OSError:
@@ -95,12 +92,11 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             return
         if not first:
             return
-        kind = classify(first[0])
-        if kind == "web":
+        if classify(first[0]) == "web":
             port = self.server.web_port
         else:
             port = self.server.usbip_port
-        bridge(client, self.server.upstream_host, port, first, kind)
+        bridge(client, self.server.upstream_host, port, first)
 
 
 class Gateway(socketserver.ThreadingTCPServer):

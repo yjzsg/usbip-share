@@ -111,11 +111,12 @@ docker compose logs --tail 30
 
 ## 测试
 
-`tests/` 下是三套可直接运行的回归测试（不需要真实 USB 设备）：
+`tests/` 下是四套可直接运行的回归测试（不需要真实 USB 设备）：
 
 ```sh
 python tests/test_metadata_keys.py     # 设备名称键规则（21 项）
 python tests/test_auth_flow.py         # 登录/会话端到端，含模拟容器重启（10 项）
+python tests/test_gateway_split.py     # 单端口分流 + 空闲长会话不被拆断（5 项，约 15s）
 python tests/extract_inline.py && node tests/test_ui_boot.js   # 管理页启动逻辑（10 项）
 ```
 
