@@ -27,6 +27,18 @@
 | `server/` | 服务端：Dockerfile、compose、单端口分流网关、中文管理页、设备名称/备注元数据维护逻辑与自动化测试 |
 | `client/` | Windows 客户端：上游 BSD 许可声明 + 本分支相对基线的完整改动补丁 + 构建说明 |
 
+## 致谢
+
+本项目 Windows 客户端基于 **[usbip-win2](https://github.com/vadimgrn/usbip-win2)**，
+由 **[Vadym Hrynchyshyn](https://github.com/vadimgrn)** 原创并以 BSD 2-Clause 许可开源。
+
+`vadimgrn/usbip-win2` 把 Linux 内核的 USB/IP 协议带到 Windows，并附带了本仓库
+修改的基线 (`74f5a7fa`)。`server/` 之外的所有客户端改动都在 `client/changes.patch`
+里，方便与上游同步演进。
+
+**没有原作者把 USB/IP 在 Windows 上跑通，就没有这个项目**——衷心感谢
+Vadym Hrynchyshyn 在 USB/IP Windows 支持上的持续贡献。
+
 ## 快速开始（服务端）
 
 ```sh
