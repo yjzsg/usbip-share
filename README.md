@@ -40,9 +40,10 @@ docker compose up -d --build
 
 ## 快速开始（客户端）
 
-* **用预编译版本**：到 [Releases](https://github.com/yjzsg/usbip-share/releases) 下载
-  `USB-IP-CN-Client-0.9.8.0.zip`（2.6 MB，sha256 `0bf90bf6…4391`），解压得到单文件免安装的
-  `USB-IP-中文客户端-0.9.8.0适配版.exe`（sha256 `519f1a6f…e060`），双击即可运行。
+* **用预编译版本**：到 [Releases](https://github.com/yjzsg/usbip-share/releases) 下载，
+  两个版本任选其一，sha256 在对应 Release 页标注：
+  * `USB-SHARE-Setup-0.9.8.0.exe`（约 22 MB，含驱动 + 单文件客户端 + 中文管理页安装器）；
+  * `USB-SHARE-Client-0.9.8.0.zip`（约 2.6 MB，仅单文件客户端，需先装过驱动）。
 * **自己构建**：客户端是 `usbip-win2` 的修改版，按 [`client/README.md`](client/README.md)
   应用 `client/changes.patch` 后用 Visual Studio 构建。
 
