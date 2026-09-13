@@ -102,24 +102,54 @@ docker compose logs --tail 30
 | GET | `/` | 否 | 中文管理页 |
 | GET | `/api/health` | 否 | 健康检查 |
 | GET | `/api/session` | 否 | 返回 `authorized` / `mustChange` / `authDisabled` |
-| GET | `/api/devices` | 否 | 设备列表（含名称、备注、识别依据、占用方） |
+| GET | `/api/devices` | 否 | 设备列表（含名称、备注、识别依据、占用方、等待名单） |
 | POST | `/api/login` | 否 | `{password}` → `{token, mustChange}` |
 | POST | `/api/change-password` | 是 | `{oldPassword, newPassword}` |
-| POST | `/api/clients/heartbeat` | 否 | Windows 客户端登记占用方（心跳） |
+| POST | `/api/clients/heartbeat` | 否 | Windows 客户端登记占用方 + 排队意愿（心跳） |
 | POST | `/api/devices/<busid>/metadata` | 是 | `{alias, remark}` |
 | POST | `/api/devices/<busid>/share\|unshare\|kick` | 是 | 共享 / 取消共享 / 强制断开 |
+| GET | `/api/devices/<busid>/queue` | 是 | 查看某台设备的等待名单 |
+| POST | `/api/devices/<busid>/queue` | 是 | `{clientId}`：管理员把某客户端加进等待名单 |
+| POST | `/api/devices/<busid>/queue/clear` | 是 | 清空等待名单，并给每位等待者发 `dropped` |
+| DELETE | `/api/devices/<busid>/queue/<clientId>` | 是 | 把某客户端移出等待名单 |
+
+### 排队（等待名单）
+
+一台设备同一时刻只能被一个客户端使用。此前第二个客户端点「连接」只会得到
+"设备忙"，而且那台设备在它的列表里可能根本不出现。现在：
+
+* `GET /api/devices` 的每个设备都带 `currentHolder`（当前占用方，可能为 `null`）
+  与 `pendingQueue`（等待名单，FIFO 顺序，含 `clientId` 和 `name`）。
+* 客户端通过**心跳**声明排队意愿 —— 心跳体里加一个 `enqueueBusids` 数组。
+  服务端按 `clientId` 去重、保持 FIFO，并在设备空出来时把
+  `queueNotifications: [{"busid": "...", "action": "attach"}]` **一次性**塞进
+  该客户端的心跳响应里。
+* 客户端收到 `attach` 通知就真正发起连接；成功连接后，它下一次心跳里的
+  `busids` 会让服务端自动把它从等待名单里摘掉（无需额外的"出队"请求）。
+* 管理员取消共享（`unshare`）时，等待者会收到 `action: "dropped"`，提示设备已
+  不可用，而不是静默消失。
+* 等待名单与通知都持久化在 `/run/usbip/queue.json`、`/run/usbip/queue-notify.json`，
+  容器重启不会丢掉正在排队的客户端。
+* 同一个客户端在同一台设备的空闲窗口内只会被唤醒一次（内存里去重），避免它
+  每拍心跳都重复声明意愿时被反复触发。
 
 ## 测试
 
-`tests/` 下是五套可直接运行的回归测试（不需要真实 USB 设备）：
+`tests/` 下是可直接运行的回归测试（不需要真实 USB 设备）：
 
 ```sh
 python tests/test_metadata_keys.py     # 设备名称键规则（21 项）
 python tests/test_auth_flow.py         # 登录/会话端到端，含模拟容器重启（10 项）
 python tests/test_gateway_split.py     # 单端口分流 + 空闲长会话不被拆断（5 项，约 15s）
 python tests/test_public_ip.py         # 心跳里的公网 IP 只接受可全局路由地址（5 项）
+python tests/test_queue.py             # 排队：FIFO、自动出队、轮到你了、告别清理（13 项）
 node   tests/test_ui_boot.js           # 管理页：直接抽取 index.html 的内联脚本跑（55 项）
 ```
+
+也可以用 `python -m unittest discover -s tests -p 'test_queue.py'` 只跑排队那一套。
+`test_gateway_split.py` / `test_metadata_keys.py` / `test_auth_flow.py` 在导入时就会
+执行（不是 unittest 用例），所以 `unittest discover` 会把它们报成导入错误——直接
+按上面的方式单独运行即可。
 
 前两套用临时目录承载状态文件，不会碰真实配置；最后一套直接从 `index.html`
 读取真实脚本，不存在"测试跑的是生成物、和页面不同步"的问题。

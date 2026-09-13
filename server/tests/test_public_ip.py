@@ -11,18 +11,27 @@ import web
 class PublicIpTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.old_clients = web.CLIENTS_FILE
-        web.CLIENTS_FILE = Path(self.temp.name) / "clients.json"
+        root = Path(self.temp.name)
+        # Redirect every persisted store the heartbeat touches, so the test
+        # never writes to the container paths and never inherits state.
+        self.old = {
+            name: getattr(web, name)
+            for name in ("CLIENTS_FILE", "QUEUE_FILE", "NOTIFY_FILE")
+        }
+        web.CLIENTS_FILE = root / "clients.json"
+        web.QUEUE_FILE = root / "queue.json"
+        web.NOTIFY_FILE = root / "queue-notify.json"
 
     def tearDown(self):
-        web.CLIENTS_FILE = self.old_clients
+        for name, value in self.old.items():
+            setattr(web, name, value)
         self.temp.cleanup()
 
     def register(self, public_ip=None):
         payload = {"clientId": "sample", "clientName": "Sample PC", "busids": ["1-1"], "dataPort": 5555}
         if public_ip is not None:
             payload["publicIp"] = public_ip
-        ok, message, record = web.update_client(payload, "192.168.1.25")
+        ok, message, record, _notifications = web.update_client(payload, "192.168.1.25")
         self.assertTrue(ok, message)
         self.assertEqual(record["address"], "192.168.1.25")
         return record

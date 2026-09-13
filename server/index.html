@@ -51,7 +51,7 @@
     .secondary { background: #edf3ff; color: var(--brand-dark); }
     .danger { background: var(--red-bg); color: var(--red); }
     .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 1250px; }
+    table { width: 100%; border-collapse: collapse; min-width: 1460px; }
     th, td { padding: 13px 15px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; background: #fbfcfe; font-size: 13px; }
     tr:last-child td { border-bottom: 0; }
@@ -168,7 +168,7 @@
       <div class="filters">
         <div class="search-field">
           <label for="deviceSearch">搜索设备</label>
-          <input id="deviceSearch" type="search" placeholder="名称、备注、Bus ID 或连接方" autocomplete="off">
+          <input id="deviceSearch" type="search" placeholder="名称、备注、Bus ID、连接方或排队方" autocomplete="off">
         </div>
         <div class="filter-field">
           <label for="statusFilter">设备状态</label>
@@ -187,7 +187,7 @@
       </div>
     </section>
 
-    <p class="bottom">设备名称和备注保存在 NAS 配置目录；连接方来自 Windows 中文客户端的在线登记。客户端停止心跳超过约 45 秒后会自动消失。管理员可用“强制断开连接”从服务器踢掉当前远程客户端；设备仍保持共享。</p>
+    <p class="bottom">设备名称和备注保存在 NAS 配置目录；连接方来自 Windows 中文客户端的在线登记。客户端停止心跳超过约 45 秒后会自动消失。管理员可用“强制断开连接”从服务器踢掉当前远程客户端，设备仍保持共享。<br>被别的客户端占用的设备同样会列在这里，并用“排队等待”显示谁在等、排在第几位；客户端点击该设备即会加入队列，等当前连接方释放后自动接手。</p>
   </main>
 
   <div class="modal" id="loginModal" hidden>
@@ -432,6 +432,16 @@
         return `<div class="owner"><strong>${name}</strong><small>${address}</small>${ipLine}</div>`;
       }).join('');
     }
+    // 等待名单:被别的客户端占用的设备也能被所有人看到,并且明确标出谁在排队、
+    // 排在第几位。第一行就是设备一空下来会立刻被唤醒的那一位。
+    function queueSummary(pending) {
+      if (!pending || !pending.length) return '<span class="muted">—</span>';
+      return pending.map((entry, index) => {
+        const name = escapeHtml(entry.name || '未命名客户端');
+        const tag = index === 0 ? '下一位' : `第 ${index + 1} 位`;
+        return `<div class="owner"><strong>${name}</strong><small>${tag}</small></div>`;
+      }).join('');
+    }
     function renderDevices(devices) {
       if (!editorModal.hidden || !changeModal.hidden || !hasDevices) return;
       const connectedCount = devices.filter(device => device.connections && device.connections.length).length;
@@ -446,7 +456,8 @@
         if (filter === 'unshared' && device.shared) return false;
         if (filter === 'connected' && !connected) return false;
         const owners = (device.connections || []).flatMap(connection => [connection.name, connection.address]);
-        return [device.alias, device.description, device.remark, device.busid, device.vidpid, device.bindingLabel, ...owners]
+        const waiters = (device.pendingQueue || []).map(entry => entry.name);
+        return [device.alias, device.description, device.remark, device.busid, device.vidpid, device.bindingLabel, ...owners, ...waiters]
           .join(' ').toLocaleLowerCase().includes(query);
       });
       document.getElementById('count').textContent = `显示 ${visibleDevices.length} / ${devices.length} 个`;
@@ -484,11 +495,12 @@
           <td><code>${escapeHtml(device.busid)}</code></td>
           <td>${bindBadge}</td>
           <td>${connectionSummary(device.connections)}</td>
+          <td>${queueSummary(device.pendingQueue)}</td>
           <td><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span></td>
           <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${escapeHtml(device.busid)}">编辑名称/备注</button>${action}</div></td>
         </tr>`;
       }).join('');
-      const html = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>连接方</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const html = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>当前连接方</th><th>排队等待</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
       // 心跳时间戳不参与页面内容比较，未变化时不替换表格，保留焦点和滚动位置。
       if (renderedHtml === html) return;
       const scrollLeft = content.scrollLeft;

@@ -26,6 +26,17 @@ INDEX_FILE = BASE_DIR / "index.html"
 MANAGED_FILE = Path(os.environ.get("USBIP_MANAGED_FILE", "/run/usbip/managed-busids"))
 METADATA_FILE = Path(os.environ.get("USBIP_METADATA_FILE", "/etc/usbip/device-metadata.json"))
 CLIENTS_FILE = Path(os.environ.get("USBIP_CLIENTS_FILE", "/run/usbip/clients.json"))
+# Pending attach queue, keyed by busid -> ordered list of client_ids waiting
+# to take over once the current holder releases. Persisted so an admin
+# restart does not silently drop honest waiters.
+QUEUE_FILE = Path(os.environ.get("USBIP_QUEUE_FILE", "/run/usbip/queue.json"))
+# Per-client one-shot notifications. The server writes an entry here when the
+# current holder for a busid in the queue releases; the next heartbeat from
+# that client surfaces it and clears the slot. Persisted across restarts so a
+# transport hiccup does not lose the trigger.
+NOTIFY_FILE = Path(os.environ.get("USBIP_NOTIFY_FILE", "/run/usbip/queue-notify.json"))
+MAX_QUEUE_PER_BUSID = 16
+MAX_NOTIFY_PER_CLIENT = 32
 KICK_IDLE_SECONDS = int(os.environ.get("USBIP_KICK_IDLE_SECONDS", "60") or 60)
 CLIENT_TTL_SECONDS = max(45, KICK_IDLE_SECONDS + 15)
 WATCHDOG_INTERVAL_SECONDS = 10
@@ -53,6 +64,13 @@ STATE_LOCK = threading.RLock()
 # the right thing (the peer will re-register immediately).
 _WATCHDOG_MISSED_RUNS: dict[str, int] = {}
 WATCHDOG_LOCK = threading.Lock()
+# busid -> clientId that has already been told "the device is free, go ahead"
+# for the current free window. A client keeps re-sending its queue request on
+# every heartbeat while it waits, so without this memo the head would be
+# re-notified every 10s and would hammer a device that is still held. The
+# entry is dropped as soon as the waitlist for that busid changes, so a new
+# head is always re-evaluated. Guarded by STATE_LOCK.
+_QUEUE_NOTIFIED: dict[str, str] = {}
 
 AUTH_FILE = Path(os.environ.get("USBIP_AUTH_FILE", "/etc/usbip/auth.json"))
 DEFAULT_PASSWORD = "123456"
@@ -580,29 +598,29 @@ def read_clients() -> list[dict[str, object]]:
     return active
 
 
-def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, object] | None]:
+def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, object] | None, list[dict[str, object]]]:
     if not isinstance(payload, dict):
-        return False, "请求格式不正确", None
+        return False, "请求格式不正确", None, []
     client_id = payload.get("clientId")
     name = payload.get("clientName", "")
     busids = payload.get("busids", [])
     data_port = payload.get("dataPort", configured_port())
     if not isinstance(client_id, str) or not 1 <= len(client_id) <= 128:
-        return False, "客户端 ID 不正确", None
+        return False, "客户端 ID 不正确", None, []
     if not isinstance(name, str) or not name.strip():
-        return False, "客户端名称不能为空", None
+        return False, "客户端名称不能为空", None, []
     if not isinstance(busids, list) or len(busids) > 64:
-        return False, "客户端设备列表不正确", None
+        return False, "客户端设备列表不正确", None, []
     try:
         data_port = int(data_port)
     except (TypeError, ValueError):
-        return False, "客户端 USB/IP 端口不正确", None
+        return False, "客户端 USB/IP 端口不正确", None, []
     if not 1 <= data_port <= 65535:
-        return False, "客户端 USB/IP 端口不正确", None
+        return False, "客户端 USB/IP 端口不正确", None, []
     valid_busids = []
     for busid in busids:
         if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
-            return False, "客户端设备编号不正确", None
+            return False, "客户端设备编号不正确", None, []
         valid_busids.append(busid)
 
     record: dict[str, object] = {
@@ -623,12 +641,14 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
         try:
             atomic_write_json(CLIENTS_FILE, {"version": 1, "clients": records})
         except OSError as exc:
-            return False, f"保存客户端状态失败：{exc}", None
+            return False, f"保存客户端状态失败：{exc}", None, []
 
     # Any heartbeat the watchdog hasn't seen yet must reset the consecutive
     # miss counter — keeping this in lockstep with write_client means a brief
     # outage (e.g. the watchdog slept) can never escalate into a release.
     reset_client_missed_run(client_id[:128])
+
+    cid = client_id[:128]
 
     # 客户端主动告别:用户从托盘菜单选「退出」时,会先发一个 shutdown=true 的
     # 心跳过来。服务端不要等 60s watchdog,直接对该 client 声称的每个设备
@@ -636,10 +656,81 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
     # 注意:客户端进程退出后 vhci 驱动会自动清理本端的 attach 会话,服务端
     # 这边 unbind+bind 主要是为了让设备共享态立刻回到可分配池,并清掉
     # clients.json 里残留的连接方信息。
+    #
+    # 必须在此处直接返回:handle_client_goodbye() → cleanup_client_queue_and_notify()
+    # 已经把这个 clientId 从所有等待队列里删掉了,若继续往下走 enqueue 分支就会
+    # 把它重新塞回队列,留下一个永远不会再发心跳的"幽灵排队者"。
     if isinstance(payload, dict) and payload.get("shutdown") is True:
-        handle_client_goodbye(client_id[:128], valid_busids)
+        handle_client_goodbye(cid, valid_busids)
+        return True, "客户端已下线", record, []
 
-    return True, "客户端状态已更新", record
+    # A device this client actually holds must not stay in the waitlist: the
+    # wait is over the moment the attach succeeds. Doing it here (instead of
+    # only on an explicit dequeue request) means a client that attaches in
+    # response to an "attach" notification self-cleans on its very next
+    # heartbeat, so a stale entry can never leave a phantom waiter in the UI.
+    for busid in valid_busids:
+        queue_remove(busid=busid, client_id=cid)
+        # The device is held again: next time it frees up, whoever is at the
+        # head must be told even if it is the same client as last round.
+        queue_forget_notified(busid)
+
+    # Optional self-service queue management carried inside the heartbeat.
+    # Clients can ask "put me in line for this device" (enqueueBusids) or
+    # "never mind, take me out" (dequeueBusids) on the same POST, so we keep
+    # one channel to every client. A client can only act on its own behalf —
+    # its identity is its clientId, which it is the only one to send.
+    enqueue_busids, dequeue_busids = parse_queue_instructions(payload, cid)
+    if enqueue_busids is None or dequeue_busids is None:
+        return False, "排队请求格式不正确", None, []
+    for busid in enqueue_busids:
+        queue_append(busid, cid)
+        # Wake the client only once it is actually at the head *and* the
+        # device is free; otherwise the wakeup belongs to whoever is ahead.
+        if queue_head(busid) == cid:
+            queue_notify_head_if_free(busid)
+    for busid in dequeue_busids:
+        queue_remove(busid=busid, client_id=cid)
+
+    # Drain any pending queueNotifications for this client. One-shot: popped
+    # here, never replayed, so a flaky network won't keep firing stale pushes.
+    queue_notifications = pop_queue_notifications_for(cid)
+    return True, "客户端状态已更新", record, queue_notifications
+
+
+def parse_queue_instructions(payload: dict[str, object], client_id: str) -> tuple[list[str] | None, list[str] | None]:
+    """Validate the queue piggy-back fields of an /api/clients/* payload.
+
+    Clients can only manage their own queue position. Both fields accept an
+    array of busid strings; each busid is validated against SAFE_BUSID_RE.
+    Returns (None, None) on schema errors so the caller can return a 400.
+    """
+    enqueue = payload.get("enqueueBusids")
+    dequeue = payload.get("dequeueBusids")
+    # Each field is independent: a client may only join a queue, only leave
+    # one, or do both in a single heartbeat. Absent means "no change", which
+    # is also what an older client that predates this feature sends.
+    if enqueue is None and dequeue is None:
+        return [], []
+    if enqueue is None:
+        enqueue = []
+    if dequeue is None:
+        dequeue = []
+    if not isinstance(enqueue, list) or not isinstance(dequeue, list):
+        return None, None
+    if len(enqueue) > 64 or len(dequeue) > 64:
+        return None, None
+    cleaned_enqueue: list[str] = []
+    for value in enqueue:
+        if not isinstance(value, str) or not SAFE_BUSID_RE.fullmatch(value):
+            return None, None
+        cleaned_enqueue.append(value)
+    cleaned_dequeue: list[str] = []
+    for value in dequeue:
+        if not isinstance(value, str) or not SAFE_BUSID_RE.fullmatch(value):
+            return None, None
+        cleaned_dequeue.append(value)
+    return cleaned_enqueue, cleaned_dequeue
 
 
 def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
@@ -662,9 +753,11 @@ def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
             except OSError as exc:
                 print(f"{log_prefix} write clients.json failed: {exc}", flush=True)
 
+    released: list[str] = []
     for busid in busids:
         if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
             continue
+        released.append(busid)
         ok, message = kick_device(busid)
         print(
             f"{log_prefix} client={client_id} busid={busid} "
@@ -675,6 +768,405 @@ def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
     # the authoritative end of this client's session — drop both its record
     # and any in-memory watchdog counter so a fresh registration starts clean.
     reset_client_missed_run(client_id)
+    cleanup_client_queue_and_notify(client_id)
+    # Advance the waitlist for every device this client was holding, even if
+    # the release itself failed. A failed bind/unbind must not strand the
+    # queue: the next waiter is woken either way, and the device is either
+    # genuinely free now or will be once the watchdog finishes the job.
+    for busid in released:
+        queue_notify_head_if_free(busid)
+
+
+# ---------------------------------------------------------------------------
+# Pending attach queue: per-busid FIFO of clients waiting for the current
+# holder to release the device. Persisted in /run/usbip/queue.json so an
+# admin restart does not silently drop honest waiters.
+# ---------------------------------------------------------------------------
+
+
+def load_pending_queue() -> dict[str, list[str]]:
+    raw = read_json_file(QUEUE_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    # Accept both the flat form (busid -> [clientId]) and a wrapper
+    # ({"queues": {...}}) so a half-migrated file can never silently drop
+    # every waiter. The flat form is what this build writes.
+    if isinstance(raw.get("queues"), dict):
+        raw = raw["queues"]
+    cleaned: dict[str, list[str]] = {}
+    for busid, value in raw.items():
+        if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
+            continue
+        if not isinstance(value, list):
+            continue
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or not item or item in seen:
+                continue
+            if len(item) > 128:
+                continue
+            seen.add(item)
+            ordered.append(item)
+        if ordered:
+            cleaned[busid] = ordered
+    return cleaned
+
+
+def save_pending_queue(queue: dict[str, list[str]]) -> None:
+    try:
+        atomic_write_json(QUEUE_FILE, queue)
+    except OSError as exc:
+        print(f"[usbip-share-queue] write queue.json failed: {exc}", flush=True)
+
+
+def load_pending_notifications() -> dict[str, list[dict[str, object]]]:
+    raw = read_json_file(NOTIFY_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    # Same tolerance as load_pending_queue(): read the wrapper form too.
+    if isinstance(raw.get("notifications"), dict):
+        raw = raw["notifications"]
+    cleaned: dict[str, list[dict[str, object]]] = {}
+    for client_id, value in raw.items():
+        if not isinstance(client_id, str) or not client_id or len(client_id) > 128:
+            continue
+        if not isinstance(value, list):
+            continue
+        entries: list[dict[str, object]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            busid = item.get("busid")
+            action = item.get("action")
+            if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
+                continue
+            if action not in ("attach", "dropped"):
+                continue
+            entry: dict[str, object] = {"busid": busid, "action": action}
+            ts = item.get("at")
+            if isinstance(ts, (int, float)):
+                entry["at"] = int(ts)
+            entries.append(entry)
+            if len(entries) >= MAX_NOTIFY_PER_CLIENT:
+                break
+        if entries:
+            cleaned[client_id] = entries
+    return cleaned
+
+
+def save_pending_notifications(notifications: dict[str, list[dict[str, object]]]) -> None:
+    try:
+        atomic_write_json(NOTIFY_FILE, notifications)
+    except OSError as exc:
+        print(f"[usbip-share-queue] write queue-notify.json failed: {exc}", flush=True)
+
+
+def _normalize_client_id(value: object) -> str:
+    return value[:128] if isinstance(value, str) and value and len(value) <= 128 else ""
+
+
+def queue_append(busid: str, client_id: str) -> list[str]:
+    """Append `client_id` to the FIFO of `busid`, dedup, cap length.
+
+    Returns the post-mutation queue for that busid. Re-enqueuing an existing
+    waiter moves them to the tail — they wanted the device "as soon as
+    possible after I'm done", so prefer the most recent intent. The append
+    MUST preserve the FIFO position of every *other* client; dedup only
+    affects `client_id` itself.
+    """
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    client_id = _normalize_client_id(client_id)
+    if not busid or not client_id:
+        return []
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        current = [item for item in queue.get(busid, []) if item != client_id]
+        current.append(client_id)
+        if len(current) > MAX_QUEUE_PER_BUSID:
+            # Dropping the oldest waiter also moves the head, so the memo has
+            # to be re-evaluated against the surviving order.
+            current = current[-MAX_QUEUE_PER_BUSID:]
+        queue[busid] = current
+        _queue_notified_keep(busid, current[0])
+        save_pending_queue(queue)
+    return current
+
+
+def queue_remove(busid: str, client_id: str) -> list[str]:
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    client_id = _normalize_client_id(client_id)
+    if not busid or not client_id:
+        return []
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        current = [item for item in queue.get(busid, []) if item != client_id]
+        if current:
+            queue[busid] = current
+            _queue_notified_keep(busid, current[0])
+        else:
+            queue.pop(busid, None)
+            _queue_notified_forget(busid)
+        save_pending_queue(queue)
+    return current
+
+
+def queue_remove_client(client_id: str) -> int:
+    """Remove `client_id` from every device's waitlist. Returns busids touched."""
+    client_id = _normalize_client_id(client_id)
+    if not client_id:
+        return 0
+    touched = 0
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        changed = False
+        for busid, ids in list(queue.items()):
+            kept = [item for item in ids if item != client_id]
+            if len(kept) != len(ids):
+                touched += 1
+                changed = True
+                if kept:
+                    queue[busid] = kept
+                    _queue_notified_keep(busid, kept[0])
+                else:
+                    queue.pop(busid, None)
+                    _queue_notified_forget(busid)
+        if changed:
+            save_pending_queue(queue)
+    return touched
+
+
+def queue_clear(busid: str) -> bool:
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    if not busid:
+        return False
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        if busid not in queue:
+            return False
+        queue.pop(busid, None)
+        _queue_notified_forget(busid)
+        save_pending_queue(queue)
+    return True
+
+
+def queue_for(busid: str) -> list[str]:
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    if not busid:
+        return []
+    with STATE_LOCK:
+        queue = load_pending_queue()
+    return list(queue.get(busid, []))
+
+
+def queue_head(busid: str) -> str:
+    """First waiter for `busid`, or "" when nobody is waiting."""
+    ids = queue_for(busid)
+    return ids[0] if ids else ""
+
+
+def _queue_notified_keep(busid: str, head: str) -> None:
+    """Drop the wakeup memo for `busid` when the head is no longer `head`.
+
+    Called (under STATE_LOCK) after any waitlist mutation, so the memo can
+    only ever suppress a repeat wakeup for the *same* client still sitting
+    at the front. A promoted head is re-evaluated immediately.
+    """
+    if _QUEUE_NOTIFIED.get(busid) not in (None, head):
+        _QUEUE_NOTIFIED.pop(busid, None)
+
+
+def _queue_notified_forget(busid: str) -> None:
+    """Unconditionally forget the wakeup memo for `busid` (under STATE_LOCK)."""
+    _QUEUE_NOTIFIED.pop(busid, None)
+
+
+def queue_forget_notified(busid: str) -> None:
+    """Clear the wakeup memo for `busid` because the device is occupied again.
+
+    Must run whenever a device transitions to "held". Without it, a client
+    that was woken, failed to grab a device that somebody else took first,
+    and then became the head again would never be re-notified: the memo
+    would still name it from the previous free window.
+    """
+    if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
+        return
+    with STATE_LOCK:
+        _queue_notified_forget(busid)
+
+
+def queue_info(busid: str) -> list[dict[str, str]]:
+    """Waitlist for `busid`, resolved to display names for the UI.
+
+    Queue storage only carries clientIds (a client that never heartbeated
+    must not be able to inject a name), so the name is looked up in the
+    heartbeat registry at read time and falls back to a generic label.
+    """
+    ids = queue_for(busid)
+    if not ids:
+        return []
+    names = {str(item.get("clientId", "")): str(item.get("name", "")) for item in read_clients()}
+    result: list[dict[str, str]] = []
+    for client_id in ids:
+        result.append(
+            {
+                "clientId": client_id,
+                "name": names.get(client_id) or "未命名客户端",
+            }
+        )
+    return result
+
+
+def queue_drop_stale_clients(live_client_ids: set[str]) -> None:
+    """Drop queue entries for clients that no longer have any claim.
+
+    Called after the watchdog/reload sweep so a dead client cannot block
+    later waiters forever.
+    """
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        changed = False
+        for busid, ids in list(queue.items()):
+            kept = [item for item in ids if item in live_client_ids]
+            if len(kept) != len(ids):
+                changed = True
+                if kept:
+                    queue[busid] = kept
+                    _queue_notified_keep(busid, kept[0])
+                else:
+                    queue.pop(busid, None)
+                    _queue_notified_forget(busid)
+        if changed:
+            save_pending_queue(queue)
+
+
+def cleanup_client_queue_and_notify(client_id: str) -> None:
+    """Remove a client from every device's waitlist and clear its mailbox.
+
+    Called on explicit goodbye so the freshly installed management UI never
+    shows a phone line that was disconnected.
+    """
+    client_id = _normalize_client_id(client_id)
+    if not client_id:
+        return
+    touched: list[str] = []
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        changed = False
+        for busid, ids in list(queue.items()):
+            kept = [item for item in ids if item != client_id]
+            if len(kept) != len(ids):
+                changed = True
+                touched.append(busid)
+                if kept:
+                    queue[busid] = kept
+                    _queue_notified_keep(busid, kept[0])
+                else:
+                    queue.pop(busid, None)
+                    _queue_notified_forget(busid)
+        if changed:
+            save_pending_queue(queue)
+
+        notifications = load_pending_notifications()
+        if client_id in notifications:
+            del notifications[client_id]
+            save_pending_notifications(notifications)
+
+    # A departed waiter may have been the head of a list that is still
+    # waiting on a device which is already free — promote and wake the next
+    # one instead of leaving them parked behind a tombstone.
+    for busid in touched:
+        queue_notify_head_if_free(busid)
+
+
+def queue_notify_head_if_free(busid: str) -> bool:
+    """If `busid` is no longer held and the queue has waiters, notify the head.
+
+    Idempotent: notification slots are one-shot, drained on the next
+    heartbeat from the receiving client. Returns True if a notification was
+    queued, False otherwise (no waiters, still held, or the busid is unknown).
+    """
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    if not busid:
+        return False
+    if connection_info(busid):
+        # Still held by at least one client — do not pre-fire the queue.
+        return False
+    if not is_shared(busid):
+        # Busid is gone from the shared pool; clearing the queue is the
+        # admin's job, we just refuse to push ghost notifications.
+        return False
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        ids = queue.get(busid, [])
+        if not ids:
+            return False
+        head = ids[0]
+        if _QUEUE_NOTIFIED.get(busid) == head:
+            # Already told this client to go ahead, and nothing about the
+            # waitlist changed since — do not fire the same wakeup again on
+            # the next heartbeat.
+            return False
+        _QUEUE_NOTIFIED[busid] = head
+    queue_notify_client(head, busid, "attach")
+    return True
+
+
+def queue_notify_busid_holders(busid: str) -> None:
+    """Push a `dropped` notification to every waiting client.
+
+    Used when the admin unshares the device entirely. The "you're waiting
+    on something that is going away" signal beats a silent disappearance.
+    """
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    if not busid:
+        return
+    with STATE_LOCK:
+        queue = load_pending_queue()
+        ids = list(queue.get(busid, []))
+    if not ids:
+        return
+    for client_id in ids:
+        queue_notify_client(client_id, busid, "dropped")
+
+
+def queue_notify_client(client_id: str, busid: str, action: str) -> None:
+    client_id = _normalize_client_id(client_id)
+    busid = busid if isinstance(busid, str) and SAFE_BUSID_RE.fullmatch(busid) else ""
+    if not client_id or not busid or action not in ("attach", "dropped"):
+        return
+    with STATE_LOCK:
+        notifications = load_pending_notifications()
+        entries = notifications.get(client_id, [])
+        # Cap per-client mailbox so a flaky network cannot park unbounded entries.
+        entries = [item for item in entries if item.get("busid") != busid]
+        entries.append({"busid": busid, "action": action, "at": int(time.time())})
+        if len(entries) > MAX_NOTIFY_PER_CLIENT:
+            entries = entries[-MAX_NOTIFY_PER_CLIENT:]
+        notifications[client_id] = entries
+        save_pending_notifications(notifications)
+    print(
+        f"[usbip-share-queue] queued notify client={client_id} busid={busid} action={action}",
+        flush=True,
+    )
+
+
+def pop_queue_notifications_for(client_id: str) -> list[dict[str, object]]:
+    """Return and clear this client's mailbox entries.
+
+    A read here consumes the entries — duplicates the next time around are
+    intentional "you missed your turn" reminders, not stale items.
+    """
+    client_id = _normalize_client_id(client_id)
+    if not client_id:
+        return []
+    with STATE_LOCK:
+        notifications = load_pending_notifications()
+        entries = list(notifications.get(client_id, []))
+        if client_id in notifications:
+            del notifications[client_id]
+            save_pending_notifications(notifications)
+    return entries
 
 
 def bump_client_missed_run(client_id: str) -> int:
@@ -810,10 +1302,20 @@ def list_devices(include_internal: bool = False) -> tuple[list[dict[str, object]
             and not str(device.get("serial", ""))
         )
         device["displayName"] = record["alias"] or str(device["description"]) or "未知 USB 设备"
-        device["shared"] = is_shared(str(device["busid"]))
+        busid_str = str(device["busid"])
+        device["shared"] = is_shared(busid_str)
         # This is client heartbeat information, so expose it even during a
         # short bind/unbind transition; the UI labels it as a registered peer.
-        device["connections"] = connection_info(str(device["busid"]))
+        holders = connection_info(busid_str)
+        device["connections"] = holders
+        # `currentHolder` is the single owner from the client's perspective —
+        # the management web UI and the Windows client both want to know "who
+        # do I have to wait for" without rummaging through the whole list.
+        device["currentHolder"] = holders[0] if holders else None
+        # Queued waiters, in FIFO order, already resolved to display names so
+        # every consumer (admin page, Windows client) shows the same thing.
+        # Always expose a list so consumers never special-case absence.
+        device["pendingQueue"] = queue_info(busid_str)
         if not include_internal:
             device.pop("serial", None)
             device.pop("sysfsPath", None)
@@ -922,11 +1424,19 @@ def mutate_device(busid: str, action: str) -> tuple[bool, str]:
         if action == "unshare":
             if not is_shared(busid):
                 forget_managed(busid)
+                # Device already unshared; still tell waiters they are wedged
+                # so a stale queue does not live indefinitely.
+                queue_notify_busid_holders(busid)
+                queue_clear(busid)
                 return True, "设备已经处于未共享状态"
             rc, output = run_usbip("unbind", "-b", busid)
             if rc != 0:
                 return False, output.strip() or "停止共享失败"
             forget_managed(busid)
+            # Anyone in the queue is waiting on a device that has just been
+            # pulled out from under them; tell them and drop the queue.
+            queue_notify_busid_holders(busid)
+            queue_clear(busid)
             return True, "设备已停止共享"
 
     return False, "未知操作"
@@ -1003,6 +1513,8 @@ def kick_device(busid: str) -> tuple[bool, str]:
 
     remember_managed(busid)
     remove_busid_from_clients(busid)
+    # No client claims the busid anymore. Wake the queue head if any.
+    queue_notify_head_if_free(busid)
     return True, "已从服务器断开远程客户端连接，设备仍保持共享"
 
 
@@ -1088,6 +1600,16 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if not self.authorized():
+            self.send_json({"ok": False, "error": "未登录或登录已过期"}, HTTPStatus.UNAUTHORIZED)
+            return
+
+        # Admin reads of the per-device waiting list.
+        queue_get_match = re.fullmatch(r"/api/devices/([^/]+)/queue", path)
+        if queue_get_match:
+            self.do_GET_queue(unquote(queue_get_match.group(1)))
+            return
+
         self.send_json({"ok": False, "error": "找不到页面"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:  # noqa: N802 (HTTP handler API)
@@ -1119,11 +1641,17 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
-            success, message, record = update_client(payload, self.client_address[0])
-            self.send_json(
-                {"ok": success, "message": message, "client": record} if success else {"ok": False, "error": message},
-                HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST,
-            )
+            success, message, record, queue_notifications = update_client(payload, self.client_address[0])
+            if success:
+                response = {
+                    "ok": True,
+                    "message": message,
+                    "client": record,
+                    "queueNotifications": queue_notifications,
+                }
+            else:
+                response = {"ok": False, "error": message}
+            self.send_json(response, HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
             return
 
         # Everything below mutates server state and requires an admin session
@@ -1197,6 +1725,18 @@ class Handler(BaseHTTPRequestHandler):
 
         device_match = re.fullmatch(r"/api/devices/([^/]+)/(share|unshare|kick)", path)
         if not device_match:
+            # Pending-attach queue admin endpoints. `…/queue` appends a
+            # clientId to a busid's FIFO; `…/queue/clear` resets the FIFO
+            # and notifies the waiters with a `dropped` action.
+            queue_post_match = re.fullmatch(r"/api/devices/([^/]+)/queue(?:/(clear))?", path)
+            if queue_post_match:
+                busid = unquote(queue_post_match.group(1))
+                op = queue_post_match.group(2)
+                if op == "clear":
+                    self.do_handle_queue_clear(busid)
+                else:
+                    self.do_handle_queue_post(busid)
+                return
             self.send_json({"ok": False, "error": "不支持的操作"}, HTTPStatus.NOT_FOUND)
             return
 
@@ -1213,6 +1753,88 @@ class Handler(BaseHTTPRequestHandler):
         if not success:
             payload["error"] = message
         self.send_json(payload, HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
+
+
+    def do_DELETE(self) -> None:  # noqa: N802 (HTTP handler API)
+        path = urlparse(self.path).path
+        if not self.authorized():
+            self.send_json({"ok": False, "error": "未登录或登录已过期"}, HTTPStatus.UNAUTHORIZED)
+            return
+        queue_match = re.fullmatch(r"/api/devices/([^/]+)/queue/([^/]+)", path)
+        if not queue_match:
+            self.send_json({"ok": False, "error": "不支持的操作"}, HTTPStatus.NOT_FOUND)
+            return
+        busid = unquote(queue_match.group(1))
+        client_id = unquote(queue_match.group(2))[:128]
+        if not SAFE_BUSID_RE.fullmatch(busid) or not client_id:
+            self.send_json({"ok": False, "error": "参数不正确"}, HTTPStatus.BAD_REQUEST)
+            return
+        remaining = queue_remove(busid=busid, client_id=client_id)
+        self.send_json(
+            {"ok": True, "busid": busid, "queue": remaining},
+            HTTPStatus.OK,
+        )
+
+
+    def do_GET_queue(self, busid: str) -> None:
+        if not SAFE_BUSID_RE.fullmatch(busid):
+            self.send_json({"ok": False, "error": "设备编号格式不正确"}, HTTPStatus.BAD_REQUEST)
+            return
+        self.send_json(
+            {
+                "ok": True,
+                "busid": busid,
+                "queue": queue_for(busid),
+                "pendingQueue": queue_info(busid),
+            },
+            HTTPStatus.OK,
+        )
+
+    def do_handle_queue_post(self, busid: str) -> None:
+        """POST /api/devices/<busid>/queue[/<op>] — admin actions."""
+        if not SAFE_BUSID_RE.fullmatch(busid):
+            self.send_json({"ok": False, "error": "设备编号格式不正确"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            payload = self.read_body_json()
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"ok": False, "error": "请求必须是 JSON 对象"}, HTTPStatus.BAD_REQUEST)
+            return
+        client_id = str(payload.get("clientId", ""))[:128]
+        if not client_id:
+            self.send_json({"ok": False, "error": "缺少 clientId"}, HTTPStatus.BAD_REQUEST)
+            return
+        queue_list = queue_append(busid, client_id)
+        # Wake the new head right away if the device really is free, so an
+        # admin-triggered enqueue does not have to wait for the next
+        # heartbeat round-trip.
+        if queue_list and queue_list[0] == client_id:
+            queue_notify_head_if_free(busid)
+        devices, error = list_devices()
+        response = {
+            "ok": True,
+            "busid": busid,
+            "queue": queue_list,
+            "pendingQueue": queue_info(busid),
+        }
+        if error is None:
+            response["devices"] = devices
+        self.send_json(response, HTTPStatus.OK)
+
+    def do_handle_queue_clear(self, busid: str) -> None:
+        if not SAFE_BUSID_RE.fullmatch(busid):
+            self.send_json({"ok": False, "error": "设备编号格式不正确"}, HTTPStatus.BAD_REQUEST)
+            return
+        queue_notify_busid_holders(busid)
+        queue_clear(busid)
+        devices, error = list_devices()
+        response = {"ok": True, "busid": busid, "queue": []}
+        if error is None:
+            response["devices"] = devices
+        self.send_json(response, HTTPStatus.OK)
 
 
 def watchdog_loop() -> None:
@@ -1279,6 +1901,11 @@ def watchdog_loop() -> None:
                 ]
                 removed = remove_client_record(client_id)
                 reset_client_missed_run(client_id)
+                # The client itself is gone, so drop it from every waitlist
+                # and clear its mailbox. Survivors must not stay parked behind
+                # a tombstone, so cleanup also promotes + wakes any queue head
+                # that this removal exposed.
+                cleanup_client_queue_and_notify(client_id)
                 if not claimed_busids:
                     if removed:
                         print(
@@ -1294,7 +1921,10 @@ def watchdog_loop() -> None:
                         f"{'ok - ' + message if ok else 'failed - ' + message}",
                         flush=True,
                     )
+                    if ok:
+                        queue_notify_head_if_free(busid)
             prune_stale_missed_runs(live_ids)
+            queue_drop_stale_clients(live_ids)
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             print(f"{log_prefix} error: {exc}", flush=True)
 

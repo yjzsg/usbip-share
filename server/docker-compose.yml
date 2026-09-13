@@ -30,6 +30,14 @@ services:
       # Release a shared device when its client stops heartbeating this long.
       # Default 60s; our Chinese client heartbeats every 10s.
       USBIP_KICK_IDLE_SECONDS: ${USBIP_KICK_IDLE_SECONDS:-60}
+      # A client is declared gone only after this many *consecutive* watchdog
+      # cycles (~50s at the defaults) without a heartbeat, so one dropped
+      # heartbeat cannot force-release a device that is still in use.
+      USBIP_HEARTBEAT_INTERVAL_SECONDS: ${USBIP_HEARTBEAT_INTERVAL_SECONDS:-10}
+      USBIP_WATCHDOG_MISSED_RUNS: ${USBIP_WATCHDOG_MISSED_RUNS:-5}
+      # Pending-attach queue (waitlist) and its one-shot notifications.
+      USBIP_QUEUE_FILE: ${USBIP_QUEUE_FILE:-/run/usbip/queue.json}
+      USBIP_NOTIFY_FILE: ${USBIP_NOTIFY_FILE:-/run/usbip/queue-notify.json}
 
     ports:
       # Phase B(单端口):对外只开一个端口,USB/IP 与 管理接口/网页 共用。
@@ -47,6 +55,12 @@ services:
       - /lib/modules:/lib/modules:ro
       # Device names/remarks are persisted here; this mount must be writable.
       - ./config:/etc/usbip
+      # Bind-mount the two UI files instead of baking them into the image, so a
+      # web.py / index.html change ships with `docker compose up -d` and does
+      # not need a rebuild (image rebuilds are blocked on networks where the
+      # registry accelerator answers 401).
+      - ./web.py:/opt/usbip-share/web.py:ro
+      - ./index.html:/opt/usbip-share/index.html:ro
 
     healthcheck:
       test: ["CMD", "/usr/local/bin/usbip-share-healthcheck"]

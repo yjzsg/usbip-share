@@ -604,65 +604,8 @@ index 4d119541..46b657b4 100644
  </Project>
 \ No newline at end of file
 diff --git a/userspace/innosetup/task_detach_all.xml b/userspace/innosetup/task_detach_all.xml
-index d5ba4b95731f631febdeac77037ffe8d83113bb1..c67a33caacd2a6edab9b4e5d9242b704f18a8359 100644
-GIT binary patch
-literal 5052
-zcmbVQOK)366h1<%Ks@$UrAq`&g5<<aA0e%ikS3uGv^d00LK>${VmnTVuVd_+hC-4B
-zf+AEQq~2CYzzV^xl~^Fb0<l0WpyCH~g%m`2r~(y!K;iplJiT|W9phG(?dzHI{LW*}
-z_}@DT8I;$=m7+LuPV!Qbs;tPGl%!wUWWRJt9N!LhN|MET4!b2OsNHq(WJzM6It-dY
-z8IVWhAxTJD79eGHSBX7JqSjghB{eNWmM3L7BHegZp=%jBT_vdt-z!+DKz|kQB~W%L
-zYh2K7D2sAf-@tCS^uXe{9K=%`&)tgG!?#zns;y?H1N#y(0WAecsA9hY3J=fpehlv=
-zJZYautLaA+O&;si(*w_A_&%gi=!56`v33M2@!Dqsngbr<6UZ78BDf4K708>ElpKTh
-zGAO8>7A+tyMHLmwvFUADBcLK`6(zxV5te!ca&w@fRHEzDq&whnp_Nv6*w5AI&S5>P
-zq&f-_2lCG=s~8st)OlIN&KkH#QNd>wa_N(fMhW=R`^J{p_D>=bV?ZHe;XvNN-XVpC
-zBT1m+sK^ESlS+T8fqo;|=%Y=oN1fSBObdAF>WF5<sH&S1?6fIuI-NbEuzUfiF{U|q
-z%bZ)sGi{3Q8GD0#Nr85;VU+hlq9;e?B_*wbIGu#e%%FX+n>+Os%(9%SJze4Bu#DNr
-zYD|S9-Bu?f1&irH7W9t%Ki|_bYe}314{Mnj#*D0B|5<qv`d$3$mv%X&axYx(F`33%
-zsg_w))Y}V+vxLtgevL!khFWQtIasxzXdUSQuIy`!&lqyC9~ByxKIsG%>2%)SyM>cL
-zmzEzuy|<#V7ad9KG?C~ACIODoICY0&*=#QwXJ*pwc@oYkopT18-Ex;y_FffvYvd$U
-zBpH`1qEiOyMc@+b>#S$AZ5s9*oqHz{fvn;q8Woij>^k8t9aMlpotZlTKY8}V?si|=
-zYEu|H0|^tTkP@mRud<>DDSYO6<<)#)Rx-O;@03{25td4ddjA3h8t;cON~k>G=|_wT
-z4e&b!n_1sPn3j!!PM;3Mo!yn$U&MYEbvuCl0w|c-c~n&%bwMlcRf_H92&7k4oQjaV
-z0h`&Ed18#=oMcBnhTrspQCv}04PZxSghulIWY~64?;3ER*5i26n6;+=-gs@j`s|_S
-zCzRhgR0TcdWWt_KzwLhB8i%bVKy@0Om|bfKdAa}{MSSXWBZ_KkJhmR4(?qR^j3JiH
-z6A#`oYgQX-4WCu_!*5%_3T7^|>UYn5-9Jp+Xs_YpX&F61o6&`}YpI+8s?e>oI4nDg
-za5KuVTvnN}ueo0dAk4|mt|Z#PiHB3K_Rg-K)_81-qEkgUiqSor^8~UkhZnOjiio{u
-z^VR2u!6YiB8Ko_A8i=gIk~9$0Tv1t#C~O&{xaV+Y;e4uR{4~BfaqtXf9eeO|96AnQ
-zLP*tSvQ~I(J^D0Y9Z@3taj%k9zi#-LH@oKxbA^+Zwz-O#Wf&-Mp2@=_Pt9wso}vj%
-zL)xR@gbL2aCvcX=?w;*to!`EDVeYFL2iR57g?J8iDeZaebzJ^);>*oL<+8WDKIE0t
-zcQ$U%-kL~FCjDRHi`lgQxm<NV9?#{!@NZ`-XXo9U@mETH<ws|(-#qQ_UHp5;cNcfA
-zIuFnMe%jy>);#at*e*|ev;BJVF}GVfFMqxB-qxNgn;A;}R8DR0@wPJ$tjxQgoGF(w
-z?(l={xsJ=XCX#b!3ZK1sCO__PX09i%`Fnr9y))ytFJIhB`GcrYbAGZ04R!|M3zr5%
-zw=`qRO5yR<S1Z&0A5-sqc;V7kGO_)`_CFWt@mf0W#^3#E>4W(_SGF?0rM~ye@6);-
-z=c7&EeQPeh_1A3KyEgUIrSD2NUiRI$=YE|2*8g>?Z51nPSDmOf#-LGj7<D()8-{Vi
-z%tWT*4Du+rqj5HkQUr4{?@F9Mi=a7&If^&^3?gghXx`=YzKJ#SG-^dOX3W+K=8tt%
-zS<F(-Ix(CtYids7?Oo4TPHk1+we{S<n<?YKsg(QSnV;SLJgntTxc`vOw#vcu_#`~(
-z$Mk<3^d2b2@X5}~D&+jYvzzkB&H6X`i=fc=AO~~(3EVPHVsawVDe&>1hYfXN<grqJ
-zONpYLfo1E^#7T@;OewwQ9~RzqOVAz8#*Dln&&YG=LBoj22yP8Mu&@`X9>#<f!|ze7
-z_u;7z6#Acs9?<n-ofHSLJA}Ohkg_FbA-#%~cIBtJVbQbZHK6H7mF4VY;SS^g2^~Rt
-z#QDMWBYMKyY$tN5x%{KBX9Z|>s5o`P=O@9(&eSi@17}L&oz6sp(WKS&{ihvwTO%tC
-zexB%I&fTMHG*bIMXySh$lx5bV|CX>W7gW9UBTIR9SD}xcm>6u~)u#G<qx=t739G2S
-X3v)G$vbiB}Jq^A5KTUT9%HsP!H9LPt
-
-literal 1880
-zcmaJ?-*4MC5Pr{JLFl2~1}K!>u0>N?om&U1FgNxr2YE<?fsxKO5sEZO%8vj0okUTI
-z7iWMUth@W}zWYh`<*|}v2gVAmM$zCri3q4dmqM*aQSDao;6wB!J!4C5AD-I{BZ5d}
-zN72T)?FFT_*g(bYc_j*?tzNnFLRWMzRH^rt4wK|PO@_1*jyiM|rDue&1+0a2hC2+N
-zsg-VoD4uW!=`b07h?C#r!KdY5c#$OdW3<(HqjBvv+N9U{SFt6TvW`m$hS5&mc>-G)
-zv2FZ&%L`J1<Hd%cH4)WT8wVxIcA@}Fv?BIk9aO}?z1EIsL+qw@n1aIK&zyPp*NZIu
-z=^0GC+cCPGDYEeJnIU-(Z;TPf=&7vP(unmM+t8KZatF$FGA}~prQ-Jz%G8+}7!6-7
-z71ZYS{Zq1Ur2G7L4dyV#0>4?i&%J<T<tV}~&$-)-qP$Hv3Kls?DBMfkZ@1p?c5d`e
-zlwfZExZ)Lz-u?*Pj&FRY<G;Wtknvpa!MwdAT$SXPHk)iR8YG{7y}N6w`l`cg3+CPM
-zCGg{WL^erK&oMBjZI;JhA!kO9YT|oF|65u{pVywvjZlTyav56D3y8qVO?AO#4yGBH
-zc8J@FZCGbzn#Y5<nOH_ULFmn*R#Vu4OsBxDLytQlVU11f6&<-gm>-q?vn9iFa1IwU
-zF#AzUC$<vW=~p<wb1g-2NVB!l2CiVw=xZiE+(cO11HI23H!fSv)K~5t7y&k2VF8fe
-z|5$hzxzpQh^`}N!C*ZGWJrs9E@4s_XF2PhnHB0X&`-CC{L!LJqP~#mJvRQ_}v(4aG
-z;~`k!nUaTWbp>v(&BGJY$9i4w@mVS1xa`fUVbU|zs4i7l$75LwM#}}@VKUAe2eQXP
-zABVmS#M(Nvna$J$k1NLN+HykU-GrlX;zY3TqAWoL7u}bK^;KwC1dC&#H@x8wu+*pt
-zMo)r{z#|lOb8nZTf~mlJpU#)>k{s{VOO1!%kZU8{A^pf`{~uMjzR%{Jjf=*uCEv7i
-z@aRsiB5Q*5_wt*r+M?lw&gTD2vc=EZ-iz%yJmO>rWy=ABjm^5Q@aWpKdm-YOOF1f}
-cwxDr>@MY;OJnuFmzo#8Hd?#u1P^M@90*wM~b^rhX
-
+index d5ba4b95..c67a33ca 100644
+Binary files a/userspace/innosetup/task_detach_all.xml and b/userspace/innosetup/task_detach_all.xml differ
 diff --git a/userspace/libusbip/libusbip.vcxproj b/userspace/libusbip/libusbip.vcxproj
 index c27b40fa..ae513e05 100644
 --- a/userspace/libusbip/libusbip.vcxproj
@@ -871,10 +814,10 @@ index 4d7af4c0..2f84ce07 100644
          }
  }
 diff --git a/userspace/wusbip/device_columns.h b/userspace/wusbip/device_columns.h
-index d982e51b..1ca11b87 100644
+index d982e51b..5190dd23 100644
 --- a/userspace/wusbip/device_columns.h
 +++ b/userspace/wusbip/device_columns.h
-@@ -35,6 +35,21 @@ enum column_pos_t { // columns order in the tree
+@@ -35,6 +35,22 @@ enum column_pos_t { // columns order in the tree
          UPD_COL_LAST  = COL_SOURCE_ID,
  };
  
@@ -890,14 +833,15 @@ index d982e51b..1ca11b87 100644
 +enum mgmt_column_pos_t {
 +        MGMT_COL_REMARK = COL_SOURCE_ID + 1, // 12 服务器备注
 +        MGMT_COL_OWNER  = COL_SOURCE_ID + 2, // 13 占用方
-+        MGMT_COL_COUNT  = COL_SOURCE_ID + 3, // 14 树控件实际列数
++        MGMT_COL_QUEUE  = COL_SOURCE_ID + 3, // 14 排队等待(服务器等待名单)
++        MGMT_COL_COUNT  = COL_SOURCE_ID + 4, // 15 树控件实际列数
 +};
 +
  enum { // for device_columns only
          DEV_COL_URL = COL_SOURCE_ID + 1, // use get_url()
          DEV_COL_CNT
 diff --git a/userspace/wusbip/frame.cpp b/userspace/wusbip/frame.cpp
-index c5f9dc3a..11affa14 100644
+index c5f9dc3a..bde75a25 100644
 --- a/userspace/wusbip/frame.cpp
 +++ b/userspace/wusbip/frame.cpp
 @@ -25,7 +25,7 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
@@ -909,7 +853,7 @@ index c5f9dc3a..11affa14 100644
  	m_statusBar->SetStatusWidths( 2, __sb_widths );
  	m_menubar = new wxMenuBar( 0 );
  	m_menu_file = new wxMenu();
-@@ -226,6 +226,22 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+@@ -226,6 +226,27 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
  	m_view_receive_mode = new wxMenuItem( m_menu_columns, wxID_ANY, wxString( _("?") ) , wxEmptyString, wxITEM_CHECK );
  	m_menu_columns->Append( m_view_receive_mode );
  
@@ -929,10 +873,15 @@ index c5f9dc3a..11affa14 100644
 +	m_menu_columns->Append( m_view_mgmt_owner );
 +	m_view_mgmt_owner->Check( true );
 +
++	wxMenuItem* m_view_mgmt_queue;
++	m_view_mgmt_queue = new wxMenuItem( m_menu_columns, wxID_ANY, wxString( L"?" ) , wxEmptyString, wxITEM_CHECK );
++	m_menu_columns->Append( m_view_mgmt_queue );
++	m_view_mgmt_queue->Check( true );
++
  	m_menu_view->Append( m_menu_columnsItem );
  
  	m_view_appearance = new wxMenu();
-@@ -389,6 +405,23 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+@@ -389,6 +410,23 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
  	#endif
  	m_menu_devices->Append( m_cmd_detach_all );
  
@@ -956,7 +905,7 @@ index c5f9dc3a..11affa14 100644
  	m_menubar->Append( m_menu_devices, L"设备" );
  
  	m_menu_log = new wxMenu();
-@@ -475,7 +508,7 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+@@ -475,7 +513,7 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
  	m_auiToolBarAdd->SetToolSeparation( 1 );
  	m_staticTextServer = new wxStaticText( m_auiToolBarAdd, wxID_ANY, L"服务器", wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL );
  	m_staticTextServer->Wrap( -1 );
@@ -965,7 +914,15 @@ index c5f9dc3a..11affa14 100644
  
  	m_auiToolBarAdd->AddControl( m_staticTextServer );
  	m_comboBoxServer = new wxComboBox( m_auiToolBarAdd, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, NULL, wxCB_DROPDOWN|wxCB_SORT );
-@@ -573,6 +606,12 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+@@ -520,6 +558,7 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+ 	m_treeListCtrl->AppendColumn( L"源ID", wxCOL_WIDTH_AUTOSIZE, wxALIGN_CENTER, wxCOL_HIDDEN );
+ 	m_treeListCtrl->AppendColumn( L"服务器备注", wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, wxCOL_REORDERABLE|wxCOL_RESIZABLE );
+ 	m_treeListCtrl->AppendColumn( L"占用方", wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, wxCOL_REORDERABLE|wxCOL_RESIZABLE );
++	m_treeListCtrl->AppendColumn( L"排队等待", wxCOL_WIDTH_AUTOSIZE, wxALIGN_LEFT, wxCOL_REORDERABLE|wxCOL_RESIZABLE );
+ 
+ 
+ 	m_mgr.Update();
+@@ -573,6 +612,14 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
  	this->Connect( m_view_serial->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_view_column_update_ui ) );
  	m_menu_columns->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_column ), this, m_view_receive_mode->GetId());
  	this->Connect( m_view_receive_mode->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_view_column_update_ui ) );
@@ -975,10 +932,12 @@ index c5f9dc3a..11affa14 100644
 +	this->Connect( m_view_mgmt_remark->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_view_column_update_ui ) );
 +	m_menu_columns->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_column ), this, m_view_mgmt_owner->GetId());
 +	this->Connect( m_view_mgmt_owner->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_view_column_update_ui ) );
++	m_menu_columns->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_column ), this, m_view_mgmt_queue->GetId());
++	this->Connect( m_view_mgmt_queue->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_view_column_update_ui ) );
  	m_view_appearance->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_appearance ), this, m_appearance_system->GetId());
  	m_view_appearance->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_appearance ), this, m_appearance_light->GetId());
  	m_view_appearance->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_view_appearance ), this, m_appearance_dark->GetId());
-@@ -596,6 +635,8 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
+@@ -596,6 +643,8 @@ Frame::Frame( wxWindow* parent, wxWindowID id, const wxString& title, const wxPo
  	m_menu_devices->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_detach ), this, m_cmd_detach->GetId());
  	this->Connect( m_cmd_detach->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_has_selected_devices_update_ui ) );
  	m_menu_devices->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_detach_all ), this, m_cmd_detach_all->GetId());
@@ -987,7 +946,7 @@ index c5f9dc3a..11affa14 100644
  	m_menu_log->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_log_show ), this, m_log_toggle->GetId());
  	this->Connect( m_log_toggle->GetId(), wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_log_show_update_ui ) );
  	m_menu_log->Bind(wxEVT_COMMAND_MENU_SELECTED, wxCommandEventHandler( Frame::on_log_verbose ), this, m_log_verbose->GetId());
-@@ -654,6 +695,7 @@ Frame::~Frame()
+@@ -654,6 +703,7 @@ Frame::~Frame()
  	this->Disconnect( ID_ATTACH_ONCE, wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_has_any_selected_devices_update_ui ) );
  	this->Disconnect( ID_ATTACH_STOP, wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_has_any_selected_devices_update_ui ) );
  	this->Disconnect( wxID_CLOSE, wxEVT_UPDATE_UI, wxUpdateUIEventHandler( Frame::on_has_selected_devices_update_ui ) );
@@ -1016,7 +975,7 @@ index 05ca17a2..3835ad12 100644
  		virtual void on_log_show_update_ui( wxUpdateUIEvent& event ) = 0;
  		virtual void on_log_verbose( wxCommandEvent& event ) = 0;
 diff --git a/userspace/wusbip/mgmt.cpp b/userspace/wusbip/mgmt.cpp
-index 6cc8a74f..6ac2457f 100644
+index 6cc8a74f..4dd5de8e 100644
 --- a/userspace/wusbip/mgmt.cpp
 +++ b/userspace/wusbip/mgmt.cpp
 @@ -1,5 +1,5 @@
@@ -1034,7 +993,7 @@ index 6cc8a74f..6ac2457f 100644
  
  #include "wusbip.h"
  
-@@ -41,12 +42,17 @@
+@@ -41,13 +42,21 @@
  namespace
  {
  
@@ -1045,16 +1004,20 @@ index 6cc8a74f..6ac2457f 100644
 + * 此前这里是硬编码的 12/13,与 frame.cpp 的 AppendColumn 顺序隐式耦合;
 + * 改为具名常量后,列顺序一旦调整会在此处编译期报错而非静默写错列。
 + */
-+static_assert(usbip::MGMT_COL_REMARK == 12 && usbip::MGMT_COL_OWNER == 13, "列位置已变化,请同步 frame.cpp 的 AppendColumn 顺序");
++static_assert(usbip::MGMT_COL_REMARK == 12 && usbip::MGMT_COL_OWNER == 13 && usbip::MGMT_COL_QUEUE == 14,
++              "列位置已变化,请同步 frame.cpp 的 AppendColumn 顺序");
  
  struct mgmt_result
  {
          bool ok{};
 +        std::string err; // 失败原因,交给 GUI 线程显示,便于排查
          mgmt::meta_map meta;
++        // "轮到你了" 通知,由服务端在心跳响应里一次性下发(mailbox 已清空)。
++        std::vector<mgmt::queue_notice> notices;
  };
  
-@@ -105,6 +111,21 @@ void cfg_repair_int(const wchar_t *name, long val)
+ void lower_ascii(std::string &s)
+@@ -105,6 +114,21 @@ void cfg_repair_int(const wchar_t *name, long val)
          }
  }
  
@@ -1076,7 +1039,7 @@ index 6cc8a74f..6ac2457f 100644
  std::string trim(const std::string &s)
  {
          auto b = s.find_first_not_of(" \t\r\n");
-@@ -115,7 +136,28 @@ std::string trim(const std::string &s)
+@@ -115,7 +139,28 @@ std::string trim(const std::string &s)
          return s.substr(b, e - b + 1);
  }
  
@@ -1106,7 +1069,7 @@ index 6cc8a74f..6ac2457f 100644
  bool parse_host_port(const std::string &url, std::string &host, int &port)
  {
          auto s = url;
-@@ -128,21 +170,26 @@ bool parse_host_port(const std::string &url, std::string &host, int &port)
+@@ -128,21 +173,26 @@ bool parse_host_port(const std::string &url, std::string &host, int &port)
          if (s.empty()) {
                  return false;
          }
@@ -1144,7 +1107,7 @@ index 6cc8a74f..6ac2457f 100644
          return !host.empty();
  }
  
-@@ -159,6 +206,72 @@ bool hostname_matches(const std::string &url, const std::string &wanted)
+@@ -159,6 +209,72 @@ bool hostname_matches(const std::string &url, const std::string &wanted)
  
  /* ---- minimal blocking HTTP over WinSock (Connection: close) ---- */
  
@@ -1217,7 +1180,7 @@ index 6cc8a74f..6ac2457f 100644
  std::string http_exchange(const mgmt::settings &cfg, const char *method, const std::string &path, const std::string &body, bool &ok)
  {
          ok = false;
-@@ -276,30 +389,53 @@ std::string http_exchange(const mgmt::settings &cfg, const char *method, const s
+@@ -276,30 +392,79 @@ std::string http_exchange(const mgmt::settings &cfg, const char *method, const s
  
          closesocket(sock);
  
@@ -1270,20 +1233,145 @@ index 6cc8a74f..6ac2457f 100644
 +        return body;
  }
  
- bool http_post_json(const mgmt::settings &cfg, const std::string &path, const std::string &body)
+-bool http_post_json(const mgmt::settings &cfg, const std::string &path, const std::string &body)
++/*
++ * POST 并取回正文。心跳响应里带 queueNotifications(设备轮到你了),
++ * 所以不能只判断状态码 —— 必须把正文交给调用方解析。
++ *
++ * @param ok  true 表示收到了完整且状态码为 200 的响应
++ * @return 正文(可能为空字符串:服务端 200 + 空正文时)
++ */
++std::string http_post_json(const mgmt::settings &cfg, const std::string &path, const std::string &body, bool &ok)
  {
-         bool ok = false;
+-        bool ok = false;
 -        http_exchange(cfg, "POST", path, body, ok);
 -        return ok;
++        ok = false;
 +        auto resp = http_exchange(cfg, "POST", path, body, ok);
-+        return ok && http_status_code(resp) == 200;
++        if (!ok || http_status_code(resp) != 200) {
++                ok = false;
++                return {};
++        }
++        ok = true;
++
++        auto hdrEnd = resp.find("\r\n\r\n");
++        if (hdrEnd == std::string::npos) {
++                return {};
++        }
++
++        auto headers = resp.substr(0, hdrEnd);
++        auto payload = resp.substr(hdrEnd + 4);
++
++        auto lowered = headers;
++        lower_ascii(lowered);
++        if (lowered.find("transfer-encoding: chunked") != std::string::npos) {
++                payload = http_dechunk(payload);
++        }
++        return payload;
  }
  
  /* ---- tiny JSON (objects/arrays/strings/numbers/bools) ---- */
-@@ -598,12 +734,135 @@ mgmt::meta_map parse_devices(const json_value &root, const std::string &self_cli
+@@ -592,18 +757,234 @@ mgmt::meta_map parse_devices(const json_value &root, const std::string &self_cli
+                         }
+                 }
+                 dev.owner = std::move(owner);
++
++                /*
++                 * currentHolder is the single owner the server picked for us;
++                 * prefer it when `connections` was absent (an older server) so
++                 * "who do I have to wait for" still has an answer.
++                 */
++                if (auto holder = item.find("currentHolder");
++                    holder && holder->k == json_value::kind::object) {
++                        if (auto id = holder->find("clientId");
++                            id && id->k == json_value::kind::string) {
++                                dev.holder_id = id->str;
++                        }
++                        if (dev.owner.empty()) {
++                                dev.owner = to_wx(holder->find("name"));
++                        }
++                }
++                dev.busy = !dev.holder_id.empty() && dev.holder_id != self_client_id;
++
++                // Waitlist, FIFO. Index 0 is the client the server will wake
++                // next, so the column can say "下一位" instead of just a list.
++                wxString queue;
++                bool self_queued = false;
++                if (auto pending = item.find("pendingQueue");
++                    pending && pending->k == json_value::kind::array) {
++                        int index = 0;
++                        for (const auto &w : pending->vals) {
++                                if (w.k != json_value::kind::object) {
++                                        continue;
++                                }
++                                auto id = w.find("clientId");
++                                auto wid = (id && id->k == json_value::kind::string) ? id->str : std::string();
++                                wxString one;
++                                if (wid == self_client_id) {
++                                        one = index == 0 ? L"本机(下一位)" : L"本机";
++                                        self_queued = true;
++                                } else {
++                                        auto name = to_wx(w.find("name"));
++                                        if (name.empty()) {
++                                                name = L"未命名客户端";
++                                        }
++                                        one = index == 0 ? name + L"(下一位)" : name;
++                                }
++                                if (!queue.empty()) {
++                                        queue += L"、";
++                                }
++                                queue += one;
++                                ++index;
++                        }
++                }
++                dev.queue = std::move(queue);
++                dev.self_queued = self_queued;
+                 meta.emplace(std::move(dev.busid), std::move(dev));
+         }
+ 
          return meta;
  }
  
+-std::string make_heartbeat_body(const mgmt::settings &cfg, const std::map<std::string, bool> &attached)
++/*
++ * 解析心跳响应里的 queueNotifications:
++ *   [{"busid":"1-1","action":"attach"}, {"busid":"1-2","action":"dropped"}]
++ * action == "attach" 表示"设备空出来了,轮到你了",GUI 线程据此发起连接;
++ * action == "dropped" 表示设备被管理员取消共享,只需提示、不要重试。
++ *
++ * 服务端已经在下发时把这个 mailbox 清空(一次性),所以同一个通知不会重复触发;
++ * 这里只负责语法层面的容错,遇到不认识的结构直接跳过而不是整包丢弃。
++ */
++std::vector<mgmt::queue_notice> parse_queue_notices(const json_value &root)
++{
++        std::vector<mgmt::queue_notice> notices;
++
++        auto list = root.find("queueNotifications");
++        if (!list || list->k != json_value::kind::array) {
++                return notices;
++        }
++
++        for (const auto &item : list->vals) {
++                if (item.k != json_value::kind::object) {
++                        continue;
++                }
++                auto busid = item.find("busid");
++                auto action = item.find("action");
++                if (!busid || busid->k != json_value::kind::string || busid->str.empty()) {
++                        continue;
++                }
++                if (!action || action->k != json_value::kind::string) {
++                        continue;
++                }
++                if (action->str != "attach" && action->str != "dropped") {
++                        continue;
++                }
++                notices.push_back(mgmt::queue_notice { busid->str, action->str });
++        }
++
++        return notices;
++}
++
 +struct winhttp_handle
 +{
 +        HINTERNET value{};
@@ -1403,7 +1491,10 @@ index 6cc8a74f..6ac2457f 100644
 +        return fetch_public_ip_from(L"api.ipify.org");
 +}
 +
- std::string make_heartbeat_body(const mgmt::settings &cfg, const std::map<std::string, bool> &attached)
++std::string make_heartbeat_body(
++        const mgmt::settings &cfg,
++        const std::map<std::string, bool> &attached,
++        const std::set<std::string> &queued)
  {
          std::string body = "{\"clientId\":\"";
          body += json_escape(cfg.client_id);
@@ -1416,7 +1507,125 @@ index 6cc8a74f..6ac2457f 100644
          body += "\",\"dataPort\":";
          body += std::to_string(cfg.data_port);
          body += ",\"busids\":[";
-@@ -659,6 +918,7 @@ void MainFrame::mgmt_start()
+@@ -620,10 +1001,37 @@ std::string make_heartbeat_body(const mgmt::settings &cfg, const std::map<std::s
+                 body += json_escape(busid);
+                 body += '"';
+         }
++        body += ']';
++
++        /*
++         * 排队意愿:这些设备我想用,但当前被别的客户端占用,请在服务端排一个
++         * FIFO 位。客户端每拍心跳都重复声明,服务端按 clientId 去重并维持顺序;
++         * 设备空出来时服务端会在心跳响应里回发 queueNotifications,由
++         * mgmt_loop 解析后触发真正的 attach。
++         *
++         * 空数组也要发:它同时是"我已不再排队"的隐含表达(设备一 attach 成功,
++         * 服务端就会凭 busids 把该 clientId 从队列里摘掉)。
++         */
++        body += ",\"enqueueBusids\":[";
++        bool first_queued = true;
++        for (const auto &busid : queued) {
++                if (!first_queued) {
++                        body += ',';
++                }
++                first_queued = false;
++                body += '"';
++                body += json_escape(busid);
++                body += '"';
++        }
+         body += "]}";
+         return body;
+ }
+ 
++/*
++ * (构造主动告别包 + MainFrame::mgmt_send_goodbye 已移到下方匿名 namespace 外,
++ * 成员函数不能在匿名 namespace 内定义 —— 编译错误 C2888。)
++ */
++
+ std::string make_client_id()
+ {
+         GUID guid{};
+@@ -640,6 +1048,79 @@ std::string make_client_id()
+ 
+ } // namespace
+ 
++/*
++ * 构造主动告别包 —— 在普通心跳 body 末尾追加 "shutdown":true。
++ * 服务端 update_client() 收到该字段后会:
++ *   - 立即从 clients.json 删除该 clientId
++ *   - 对每个 claimed busid 调 kick_device() (unbind+bind)
++ * 等同于在管理页面点一次「强制下线」,但 0 延迟。
++ *
++ * 不能只发空 busids + shutdown:true —— 服务端需要知道要 unbind 哪些设备,
++ * 必须带上当前 m_mgmt_attached 里 attached=true 的 busid 清单。
++ */
++std::string make_goodbye_body(const mgmt::settings &cfg, const std::map<std::string, bool> &attached)
++{
++        // 告别包不声明排队意愿:进程马上退出,再排队也没有意义,服务端还会
++        // 因为 shutdown 分支直接返回、不处理 enqueue 字段。
++        auto body = make_heartbeat_body(cfg, attached, {});
++        // heartbeat body 以 '}' 收尾,直接替换为 ',...}' 即可,不需要重序列化。
++        body.pop_back();
++        body += ",\"shutdown\":true}";
++        return body;
++}
++
++/*
++ * 主动告别:在 on_close() / ~MainFrame() 中调用,把当前仍 attached 的设备清单
++ * + shutdown:true 一起 POST 给服务端。服务端 update_client() 看到 shutdown
++ * 字段会立即把 clientId 从 clients.json 删除并对每个 busid 调 kick_device(),
++ * 0 延迟释放设备。
++ *
++ * 同步阻塞,最多等 2s (http_exchange 内部 connect select 超时)。on_close
++ * 流程能容忍这点延迟;但不能在 detach 线程里做 —— 主线程随后会 WSACleanup,
++ * detached 线程再用 socket 会立刻崩。
++ */
++void MainFrame::mgmt_send_goodbye()
++{
++        mgmt::settings cfg;
++        std::map<std::string, bool> attached;
++        {
++                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                cfg = m_mgmt_cfg;
++                attached = m_mgmt_attached;
++        }
++
++        if (!cfg.enabled || cfg.host.empty()) {
++                // 管理接口未启用 / 未配置服务器 —— 没什么可告别的。
++                return;
++        }
++
++        // 候选端口:web_port (即服务端 HTTP 管理端口,与 data_port 同值),
++        // 再加上 m_mgmt_loop 已经验证过的成功端口作为兜底。
++        std::vector<int> candidates;
++        candidates.push_back(cfg.web_port);
++        if (std::find(candidates.begin(), candidates.end(), cfg.data_port) == candidates.end()) {
++                candidates.push_back(cfg.data_port);
++        }
++        auto ok_port = m_mgmt_ok_port.load();
++        if (ok_port > 0 && std::find(candidates.begin(), candidates.end(), ok_port) == candidates.end()) {
++                candidates.push_back(ok_port);
++        }
++
++        // 同步发送 —— on_close 流程能容忍最多 2s 阻塞(connect select 超时)。
++        // 不能 detach:主线程随后会 WSACleanup,detached 线程若仍在用 socket
++        // 会立即收到 WSAEINPROGRESS/WSAESHUTDOWN,而且 detached 线程访问的
++        // 任何 this 成员都是 use-after-free。
++        for (auto port : candidates) {
++                mgmt::settings c2 = cfg;
++                c2.web_port = port;
++                bool ok = false;
++                http_post_json(c2, "/api/clients/heartbeat", make_goodbye_body(c2, attached), ok);
++                if (ok) {
++                        return; // 收到完整 200 响应即视为告别成功
++                }
++        }
++}
++
+ void MainFrame::mgmt_start()
+ {
+         if (m_mgmt_thread.joinable()) {
+@@ -659,6 +1140,7 @@ void MainFrame::mgmt_start()
                  wxLogStatus(L"管理接口不可用:Winsock 初始化失败");
                  return;
          }
@@ -1424,7 +1633,7 @@ index 6cc8a74f..6ac2457f 100644
  
          m_mgmt_stop = false;
          m_mgmt_thread = std::thread(&MainFrame::mgmt_loop, this);
-@@ -667,11 +927,20 @@ void MainFrame::mgmt_start()
+@@ -667,11 +1149,20 @@ void MainFrame::mgmt_start()
  
  void MainFrame::mgmt_stop()
  {
@@ -1449,7 +1658,7 @@ index 6cc8a74f..6ac2457f 100644
  }
  
  void MainFrame::mgmt_capture_settings()
-@@ -690,10 +959,29 @@ void MainFrame::mgmt_capture_settings()
+@@ -690,10 +1181,29 @@ void MainFrame::mgmt_capture_settings()
  
          bool changed_host = cfg.host != m_mgmt_cfg.host;
  
@@ -1482,8 +1691,81 @@ index 6cc8a74f..6ac2457f 100644
          }
          cfg.web_port = web_port;
  
-@@ -771,11 +1059,10 @@ void MainFrame::mgmt_on_enable(wxCommandEvent&)
+@@ -732,6 +1242,10 @@ void MainFrame::mgmt_capture_settings()
+                 m_mgmt_cfg = std::move(cfg);
+                 if (changed_host) {
+                         m_mgmt_attached.clear();
++                        // 排队位和占用方元数据都属于旧服务器:换了地址以后
++                        // 继续声明旧的 busid 只会往新服务器上写一批无意义的队列项。
++                        m_mgmt_queued.clear();
++                        m_mgmt_meta.clear();
+                         m_mgmt_ok_port.store(0); // 服务器变了,之前记住的端口不再适用
+                 }
+         }
+@@ -769,13 +1283,72 @@ void MainFrame::mgmt_on_enable(wxCommandEvent&)
+         wxLogStatus(m_mgmt_enabled ? L"已启用服务器管理接口" : L"已停用服务器管理接口");
+ }
  
++/*
++ * 加入/退出某台设备的排队。
++ *
++ * 只改本机内存里的"排队意愿"集合并踢一次心跳线程,由心跳把 enqueueBusids
++ * 带给服务端 —— 刻意不做一次性的"排队"POST,原因是:
++ *   1. 排队是持续意愿而非一次性动作。客户端必须每拍都声明,服务端才能区分
++ *      "还在等"和"已经不在了"(后者会因为心跳消失被清出队列)。
++ *   2. 只保留心跳这一条通道,排队状态和连接状态就永远不会互相矛盾。
++ *
++ * @return false 表示管理接口未启用/未配置服务器,调用方应回退到普通 attach
++ */
++bool MainFrame::mgmt_device_busy(_In_ const std::string &busid)
++{
++        if (busid.empty()) {
++                return false;
++        }
++
++        std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++        auto it = m_mgmt_meta.find(busid);
++        return it != m_mgmt_meta.end() && it->second.busy;
++}
++
++void MainFrame::mgmt_clear_all_queues()
++{
++        bool had_any = false;
++        {
++                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                had_any = !m_mgmt_queued.empty();
++                m_mgmt_queued.clear();
++        }
++
++        if (had_any) {
++                m_mgmt_kick.store(true); // 立刻把"我不等了"送出去
++        }
++}
++
++bool MainFrame::mgmt_queue_device(_In_ const std::string &busid, _In_ bool join)
++{
++        if (busid.empty()) {
++                return false;
++        }
++
++        {
++                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                if (!m_mgmt_cfg.enabled || m_mgmt_cfg.host.empty()) {
++                        return false;
++                }
++                if (join) {
++                        m_mgmt_queued.insert(busid);
++                } else {
++                        m_mgmt_queued.erase(busid);
++                }
++        }
++
++        // 立刻把意愿送出去,不等下一个 10s 轮询窗口,这样"点击排队"在界面
++        // 上几乎是即时的(服务端下一次心跳就会把本机挂进 FIFO)。
++        m_mgmt_kick.store(true);
++        return true;
++}
++
  void MainFrame::mgmt_apply_event(wxThreadEvent &event)
  {
 -        auto result = static_cast<mgmt_result*>(event.GetPayload<mgmt_result*>());
@@ -1495,7 +1777,7 @@ index 6cc8a74f..6ac2457f 100644
  
          auto &tree = *m_treeListCtrl;
          if (!tree.GetColumnCount()) {
-@@ -787,7 +1074,21 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
+@@ -787,7 +1360,40 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
                  std::lock_guard<std::mutex> lock(m_mgmt_mtx);
                  cfg = m_mgmt_cfg;
          }
@@ -1514,11 +1796,30 @@ index 6cc8a74f..6ac2457f 100644
 +        }
 +        m_mgmt_last_err.clear();
 +
++        /*
++         * 缓存本次元数据:attach 路径要用它判断"设备是否被别人占用"。
++         * 只在成功时覆盖 —— 失败时保留上一份,避免网络闪断让占用方信息
++         * 突然消失、于是把一台正被占用的设备当成空闲去直连。
++         */
++        {
++                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                m_mgmt_meta = result->meta;
++        }
++
++        /*
++         * 排队通知先处理:它和元数据是两个独立的载荷,即使本次没有任何设备
++         * 需要刷新,轮到我们使用设备这件事也必须执行 —— 否则用户会一直
++         * 等一个已经空出来的设备。
++         */
++        if (!result->notices.empty()) {
++                mgmt_handle_queue_notices(result->notices);
++        }
++
 +        if (result->meta.empty()) {
                  return;
          }
  
-@@ -809,13 +1110,13 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
+@@ -809,13 +1415,75 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
                                          tree.SetItemText(dev, usbip::COL_PRODUCT, m.alias);
                                  }
                          }
@@ -1533,10 +1834,72 @@ index 6cc8a74f..6ac2457f 100644
                          if (owner != m.owner) {
 -                                tree.SetItemText(dev, kMgmtOwnerCol, m.owner);
 +                                tree.SetItemText(dev, usbip::MGMT_COL_OWNER, m.owner);
++                        }
++                        auto queue = tree.GetItemText(dev, usbip::MGMT_COL_QUEUE);
++                        if (queue != m.queue) {
++                                tree.SetItemText(dev, usbip::MGMT_COL_QUEUE, m.queue);
++                        }
++                }
++        }
++}
++
++/*
++ * 服务端告诉我们"设备空出来了"。这里在 GUI 线程上走和用户点击「连接」
++ * 完全相同的路径去 attach:同一个 attach(url, busid, ...) 调用、同一套
++ * 参数(serial / 接收模式都从树上取),不额外引入一条"影子连接"逻辑。
++ *
++ * - attach:真正发起连接。若在等待期间设备又被别人抢走,attach 会失败,
++ *   此时重新声明排队意愿(m_mgmt_queued 保留),下一轮继续等。
++ * - dropped:设备被管理员取消共享,排队已经没有意义,只提示一次并撤出队列。
++ */
++void MainFrame::mgmt_handle_queue_notices(const std::vector<mgmt::queue_notice> &notices)
++{
++        auto &tree = *m_treeListCtrl;
++        if (!tree.GetColumnCount()) {
++                return;
++        }
++
++        for (const auto &notice : notices) {
++                if (notice.action == "dropped") {
++                        {
++                                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                                m_mgmt_queued.erase(notice.busid);
++                        }
++                        set_status_text(wxString::FromUTF8(
++                                "服务器已停止共享 " + notice.busid + "，已退出该设备的排队"));
++                        continue;
++                }
++
++                if (notice.action != "attach") {
++                        continue;
++                }
++
++                for (auto server = tree.GetFirstItem(); server.IsOk(); server = tree.GetNextSibling(server)) {
++                        for (auto dev = tree.GetFirstChild(server); dev.IsOk(); dev = tree.GetNextSibling(dev)) {
++                                if (tree.GetItemText(dev, 0).utf8_string() != notice.busid) {
++                                        continue;
++                                }
++
++                                auto url = tree.GetItemText(server);
++                                auto serial = tree.GetItemText(dev, usbip::COL_SERIAL);
++                                auto recv_mode = tree.GetItemText(dev, usbip::COL_RECEIVE_MODE);
++
++                                wxLogVerbose(L"%s: 轮到本机使用 %s，开始连接", wxString::FromAscii(__func__), url);
++
++                                if (auto err = attach(url, tree.GetItemText(dev), serial, recv_mode, false)) {
++                                        if (err != ERROR_OPERATION_ABORTED) {
++                                                // 又被别人抢先了 —— 排队意愿保留,下一轮继续;
++                                                // 对方释放时服务端会再次唤醒本机。
++                                                wxLogVerbose(L"排队后连接 %s 失败(错误 %lu),继续等待", url, err);
++                                        }
++                                } else {
++                                        mgmt_queue_device(notice.busid, false);
++                                }
++                                break;
                          }
                  }
          }
-@@ -823,6 +1124,9 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
+@@ -823,6 +1491,9 @@ void MainFrame::mgmt_apply_event(wxThreadEvent &event)
  
  void MainFrame::mgmt_loop()
  {
@@ -1546,7 +1909,23 @@ index 6cc8a74f..6ac2457f 100644
          auto wait_or_stop = [this](int ms) {
                  for (int waited = 0; waited < ms && !m_mgmt_stop; waited += 200) {
                          if (m_mgmt_kick.exchange(false)) {
-@@ -854,10 +1158,16 @@ void MainFrame::mgmt_loop()
+@@ -836,6 +1507,7 @@ void MainFrame::mgmt_loop()
+         for (;;) {
+                 mgmt::settings cfg;
+                 std::map<std::string, bool> attached;
++                std::set<std::string> queued;
+                 {
+                         std::lock_guard<std::mutex> lock(m_mgmt_mtx);
+                         if (m_mgmt_stop) {
+@@ -843,6 +1515,7 @@ void MainFrame::mgmt_loop()
+                         }
+                         cfg = m_mgmt_cfg;
+                         attached = m_mgmt_attached;
++                        queued = m_mgmt_queued;
+                 }
+ 
+                 if (!cfg.enabled || cfg.host.empty() || cfg.web_port < 1 || cfg.web_port > 65535) {
+@@ -854,10 +1527,16 @@ void MainFrame::mgmt_loop()
  
                  // Phase B 兼容:管理接口可能在新服务端(单端口 5555)或老服务端
                  // (独立管理端口)上。先试上次成功的端口;不通再回退到 usbip 数据端口。
@@ -1565,7 +1944,7 @@ index 6cc8a74f..6ac2457f 100644
                  };
  
                  std::string body;
-@@ -874,14 +1184,17 @@ void MainFrame::mgmt_loop()
+@@ -874,14 +1553,17 @@ void MainFrame::mgmt_loop()
                          }
                  }
  
@@ -1584,7 +1963,7 @@ index 6cc8a74f..6ac2457f 100644
                          }
                  }
  
-@@ -891,17 +1204,39 @@ void MainFrame::mgmt_loop()
+@@ -891,17 +1573,54 @@ void MainFrame::mgmt_loop()
                          m_mgmt_ok_port.store(use_port);
  
                          // Register ourselves so the server UI shows the connection owner.
@@ -1605,7 +1984,23 @@ index 6cc8a74f..6ac2457f 100644
 +
                          auto c2 = cfg;
                          c2.web_port = use_port; // 心跳与 GET 走同一端口
-                         http_post_json(c2, "/api/clients/heartbeat", make_heartbeat_body(cfg, attached));
+-                        http_post_json(c2, "/api/clients/heartbeat", make_heartbeat_body(cfg, attached));
++                        bool heartbeat_ok = false;
++                        auto hb_body = http_post_json(
++                                c2, "/api/clients/heartbeat",
++                                make_heartbeat_body(cfg, attached, queued), heartbeat_ok);
++
++                        /*
++                         * 心跳响应是排队机制的交付通道:服务端在设备空出来时
++                         * 把 attach 通知写进这个 clientId 的 mailbox,并在本次
++                         * 响应里一次性下发。解析后交给 GUI 线程执行 —— 真正
++                         * 的 attach 只能在 GUI 线程做(和用户点击同一条路径)。
++                         */
++                        if (heartbeat_ok && !hb_body.empty()) {
++                                if (json_value root; json_parse(hb_body, root)) {
++                                        result->notices = parse_queue_notices(root);
++                                }
++                        }
 +                }
  
 +                // 成功与失败都要送回 GUI 线程:失败时由界面提示原因,否则用户只看到
@@ -1628,7 +2023,7 @@ index 6cc8a74f..6ac2457f 100644
                          return;
                  }
 diff --git a/userspace/wusbip/mgmt.h b/userspace/wusbip/mgmt.h
-index 657398f3..cb6b51aa 100644
+index 657398f3..60b9bcf5 100644
 --- a/userspace/wusbip/mgmt.h
 +++ b/userspace/wusbip/mgmt.h
 @@ -1,10 +1,10 @@
@@ -1645,7 +2040,17 @@ index 657398f3..cb6b51aa 100644
   *
   * Design goals:
   *  - Everything is optional. If the host does not run the management API,
-@@ -34,6 +34,7 @@ struct settings
+@@ -18,7 +18,9 @@
+ #pragma once
+ 
+ #include <map>
++#include <set>
+ #include <string>
++#include <vector>
+ 
+ #include <wx/string.h>
+ 
+@@ -34,6 +36,7 @@ struct settings
          std::string token;             // optional X-Admin-Token (unused by read/heartbeat)
          std::string client_id;         // stable per-PC id (persisted)
          std::string client_name;       // computer name shown to other users
@@ -1653,6 +2058,32 @@ index 657398f3..cb6b51aa 100644
  };
  
  struct meta_device
+@@ -43,9 +46,25 @@ struct meta_device
+         wxString alias;                // non-empty iff the user set a server-side alias
+         wxString remark;               // server-side remark (web UI)
+         wxString owner;                // assembled "谁在用" text
++        wxString queue;                // assembled "谁在排队" text (FIFO order)
++        std::string holder_id;         // clientId currently holding the device ("" if free)
+         bool has_alias{ false };
++        bool busy{ false };            // held by *another* client; attach must queue
++        bool self_queued{ false };     // this PC is already in the server-side waitlist
+ };
+ 
+ using meta_map = std::map<std::string, meta_device>; // keyed by busid (ASCII)
+ 
++/*
++ * One pending queue wakeup delivered by the server on a heartbeat. The
++ * server writes these when the device a client is waiting for becomes free,
++ * and drains the mailbox on the next heartbeat — so each entry is a
++ * one-shot "now it is your turn" trigger.
++ */
++struct queue_notice
++{
++        std::string busid;
++        std::string action; // "attach" (your turn) or "dropped" (device went away)
++};
++
+ } // namespace mgmt
 diff --git a/userspace/wusbip/resources/Add_dark.svg b/userspace/wusbip/resources/Add_dark.svg
 index c0b38448..5ba816c5 100644
 --- a/userspace/wusbip/resources/Add_dark.svg
@@ -1977,7 +2408,7 @@ index 5df6e8ef..3299b7bc 100644
          default:
                  s = wxString::FromAscii(vhci::get_state_str(state));
 diff --git a/userspace/wusbip/wusbip.cpp b/userspace/wusbip/wusbip.cpp
-index 47dc5d1a..fa9d5ad8 100644
+index 47dc5d1a..22788b98 100644
 --- a/userspace/wusbip/wusbip.cpp
 +++ b/userspace/wusbip/wusbip.cpp
 @@ -26,7 +26,12 @@
@@ -2155,7 +2586,7 @@ index 47dc5d1a..fa9d5ad8 100644
  const auto g_persistent_mark = L'\u2713'; // CHECK MARK, 2714 HEAVY CHECK MARK
  auto &g_key_devices = L"/devices";
  auto &g_key_url = L"url";
-@@ -457,15 +617,62 @@ MainFrame::MainFrame(_In_ Handle read, _In_ int appearance) :
+@@ -457,15 +617,76 @@ MainFrame::MainFrame(_In_ Handle read, _In_ int appearance) :
          
          init();
          restore_state();
@@ -2192,6 +2623,20 @@ index 47dc5d1a..fa9d5ad8 100644
 +         */
 +        m_mgmt_stop = true; // 先置停止标志,让管理线程尽快从循环退出
 +
++        /*
++         * 兜底告别:如果 on_close() 因为异常被绕过(任务管理器 kill、
++         * join 抛 system_error 直接进析构等),管理接口线程可能还在
++         * 跑,m_mgmt_attached 也还有效 —— 这时再发一次告别,
++         * 让服务端 0 延迟释放设备。正常 on_close() 已经发过,
++         * 服务端会幂等处理(kick_device 在设备不存在时返回 False,
++         * handle_client_goodbye 在 clientId 缺失时直接返回)。
++         */
++        try {
++                mgmt_send_goodbye();
++        } catch (...) {
++                // 析构期不能再抛
++        }
++
 +        try {
 +                if (m_read_thread.joinable()) {
 +                        try {
@@ -2219,7 +2664,7 @@ index 47dc5d1a..fa9d5ad8 100644
  }
  
  void MainFrame::check_view_appearance(_In_ int appearance)
-@@ -484,7 +691,7 @@ void MainFrame::init()
+@@ -484,7 +705,7 @@ void MainFrame::init()
          m_log->SetVerbose(true); // produce messages for wxLOG_Info
          m_log->SetLogLevel(DEFAULT_LOGLEVEL);
  
@@ -2228,7 +2673,7 @@ index 47dc5d1a..fa9d5ad8 100644
  
          SetIcon(wxIcon(L"USBip")); // see wxwidgets.rc
          
-@@ -495,12 +702,141 @@ void MainFrame::init()
+@@ -495,12 +716,141 @@ void MainFrame::init()
          set_menu_columns_labels();
          m_comboBoxServer->SetMaxLength(NI_MAXHOST);
  
@@ -2373,7 +2818,7 @@ index 47dc5d1a..fa9d5ad8 100644
          Bind(EVT_DEVICE_STATE, &MainFrame::on_device_state, this);
          Bind(wxEVT_ICONIZE, &MainFrame::on_iconize, this);
          Bind(wxEVT_MENU, &MainFrame::toggle_auto_connect, this, ID_AUTO_CONNECT);
-@@ -518,6 +854,10 @@ void MainFrame::init()
+@@ -518,6 +868,10 @@ void MainFrame::init()
  
          // 托盘图标常驻:程序一启动就在系统托盘显示(不只在隐藏时才出现)
          ensure_taskbar_icon();
@@ -2384,7 +2829,7 @@ index 47dc5d1a..fa9d5ad8 100644
  
          // 清理驱动残留的自动重连"连接尝试":旧版本曾用持续连接(attach 非 once)
          // 给驱动留下过自动重连会话——即使客户端退出、界面未勾 Auto,驱动仍会周期
-@@ -528,16 +868,77 @@ void MainFrame::init()
+@@ -528,16 +882,77 @@ void MainFrame::init()
          }
  }
  
@@ -2472,7 +2917,7 @@ index 47dc5d1a..fa9d5ad8 100644
  void MainFrame::init_tree_list()
  {
          auto &tree = *m_treeListCtrl;
-@@ -550,9 +951,6 @@ void MainFrame::init_tree_list()
+@@ -550,9 +965,6 @@ void MainFrame::init_tree_list()
  
          if (auto hdr = dv.GenericGetHeader()) {
                  hdr->Bind(wxEVT_MOUSEWHEEL, wxMouseEventHandler(MainFrame::on_tree_mouse_wheel), this);
@@ -2482,7 +2927,7 @@ index 47dc5d1a..fa9d5ad8 100644
          }
  }
  
-@@ -572,10 +970,322 @@ wxWithImages::Images MainFrame::get_tree_images()
+@@ -572,10 +984,322 @@ wxWithImages::Images MainFrame::get_tree_images()
          static_assert(IMG_DEVICE == 1);
  }
  
@@ -2805,7 +3250,7 @@ index 47dc5d1a..fa9d5ad8 100644
  }
  
  void MainFrame::sync_auto_connect_menu()
-@@ -599,7 +1309,8 @@ void MainFrame::toggle_auto_connect(_In_ wxCommandEvent&)
+@@ -599,7 +1323,8 @@ void MainFrame::toggle_auto_connect(_In_ wxCommandEvent&)
  namespace { // HKCU ...\Run autostart helpers
  
  constexpr wchar_t kRunKeyPath[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
@@ -2815,7 +3260,7 @@ index 47dc5d1a..fa9d5ad8 100644
  
  bool read_auto_start()
  {
-@@ -608,6 +1319,10 @@ bool read_auto_start()
+@@ -608,6 +1333,10 @@ bool read_auto_start()
                  return false;
          }
          auto rc = RegQueryValueExW(key, kRunValueName, nullptr, nullptr, nullptr, nullptr);
@@ -2826,7 +3271,7 @@ index 47dc5d1a..fa9d5ad8 100644
          RegCloseKey(key);
          return rc == ERROR_SUCCESS; // 值存在即视为已开启
  }
-@@ -620,8 +1335,10 @@ bool write_auto_start(bool enable)
+@@ -620,8 +1349,10 @@ bool write_auto_start(bool enable)
                          return true; // 打开失败视为目标已不存在
                  }
                  auto rc = RegDeleteValueW(key, kRunValueName);
@@ -2838,7 +3283,7 @@ index 47dc5d1a..fa9d5ad8 100644
          }
  
          wchar_t exe[MAX_PATH]{};
-@@ -636,6 +1353,10 @@ bool write_auto_start(bool enable)
+@@ -636,6 +1367,10 @@ bool write_auto_start(bool enable)
          }
          auto rc = RegSetValueExW(key, kRunValueName, 0, REG_SZ,
                          reinterpret_cast<const BYTE*>(cmd.wc_str()), static_cast<DWORD>((cmd.Len()+1)*sizeof(wchar_t)));
@@ -2849,7 +3294,7 @@ index 47dc5d1a..fa9d5ad8 100644
          RegCloseKey(key);
          return rc == ERROR_SUCCESS;
  }
-@@ -686,8 +1407,7 @@ void MainFrame::update_summary()
+@@ -686,8 +1421,7 @@ void MainFrame::update_summary()
                  for (auto d = tree.GetFirstChild(s); d.IsOk(); d = tree.GetNextSibling(d)) {
                          ++devices;
                          auto &st = tree.GetItemText(d, COL_STATE);
@@ -2859,7 +3304,7 @@ index 47dc5d1a..fa9d5ad8 100644
                                  ++connected;
                          }
                  }
-@@ -704,7 +1424,45 @@ void MainFrame::schedule_auto_connect()
+@@ -704,7 +1438,45 @@ void MainFrame::schedule_auto_connect()
  
          auto host = m_comboBoxServer->GetValue();
          if (host.empty()) {
@@ -2906,7 +3351,7 @@ index 47dc5d1a..fa9d5ad8 100644
          }
  
          CallAfter([this]
-@@ -713,6 +1471,18 @@ void MainFrame::schedule_auto_connect()
+@@ -713,6 +1485,18 @@ void MainFrame::schedule_auto_connect()
                  wxCommandEvent evt;
                  add_exported_devices(evt);
                  m_auto_connecting = false;
@@ -2925,7 +3370,7 @@ index 47dc5d1a..fa9d5ad8 100644
          });
  }
  
-@@ -736,11 +1506,13 @@ void MainFrame::on_close(wxCloseEvent &event)
+@@ -736,11 +1520,29 @@ void MainFrame::on_close(wxCloseEvent &event)
  
          // 未勾选「关闭时直接退出」:点 × 收进系统托盘后台常驻(角标保留)
          if (!m_close_to_tray && event.CanVeto()) {
@@ -2937,10 +3382,26 @@ index 47dc5d1a..fa9d5ad8 100644
  
 +        m_window_fix_timer.Stop();
 +        m_taskbar_watchdog_timer.Stop();
++
++        /*
++         * 主动告别:正常退出路径下,在断 read_loop 之前先告诉服务端"我走了"。
++         * 否则服务端只能等 watchdog(KICK_IDLE_SECONDS=60s)发现心跳停,才会
++         * unbind 设备 —— 这 60s 内管理页面会看到"设备被占用"但其实客户端已经退了,
++         * 其他客户端也无法绑定到该设备。
++         *
++         * mgmt_send_goodbye() 同步阻塞,最多等 2s(http_exchange 内部 connect 超时),
++         * 超时直接放弃 —— watchdog 会兜底。
++         *
++         * 必须在 break_read_loop() 之前:此时 m_mgmt_attached 还反映"本机实际
++         * 还在用的设备",busid 清单是准确的。break_read_loop 之后 vhci 驱动
++         * 会清 attach 会话,read_loop 退出,busid 就丢了。
++         */
++        mgmt_send_goodbye();
++
          break_read_loop();
          m_read_thread.join();
          mgmt_stop();
-@@ -763,16 +1535,67 @@ void MainFrame::on_exit(wxCommandEvent&)
+@@ -763,16 +1565,67 @@ void MainFrame::on_exit(wxCommandEvent&)
          Close(true);
  }
  
@@ -3008,7 +3469,7 @@ index 47dc5d1a..fa9d5ad8 100644
  void MainFrame::ensure_taskbar_icon()
  {
          if (!m_taskbar_icon) {
-@@ -780,12 +1603,65 @@ void MainFrame::ensure_taskbar_icon()
+@@ -780,12 +1633,65 @@ void MainFrame::ensure_taskbar_icon()
          }
  
          if (m_taskbar_icon->IsIconInstalled()) {
@@ -3076,7 +3537,7 @@ index 47dc5d1a..fa9d5ad8 100644
  }
  
  void MainFrame::on_local_name(wxCommandEvent&)
-@@ -881,7 +1757,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -881,7 +1787,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          mgmt_note_state(st);
  
          if (m_taskbar_icon && m_taskbar_icon->IsIconInstalled()) {
@@ -3085,7 +3546,7 @@ index 47dc5d1a..fa9d5ad8 100644
                  m_taskbar_icon->show_balloon(s);
          }
  
-@@ -914,20 +1790,9 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -914,20 +1820,9 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          auto [dc, flags] = make_device_columns(st);
          wxASSERT(flags);
  
@@ -3109,7 +3570,60 @@ index 47dc5d1a..fa9d5ad8 100644
  
          if (auto &port = dc[COL_PORT]; !port.empty() && is_port_residual(st.state)) {
                  port.clear();
-@@ -1365,6 +2230,186 @@ void MainFrame::on_detach_all(wxCommandEvent&)
+@@ -1256,6 +2151,21 @@ void MainFrame::attach(_In_ bool once)
+                 //     不做后台偷偷重连;需要自愈就在该行勾 Auto)
+                 auto dev_once = once || !is_persistent(dev);
+ 
++                /*
++                 * 设备正被别的客户端占用:不再弹一个必然失败的"设备忙"错误,
++                 * 而是登记到服务端的排队队列。当前占用方一释放,服务端会通过
++                 * 心跳回发 attach 通知,由 mgmt_handle_queue_notices() 自动接手。
++                 *
++                 * 只有在管理接口真的可用时才有排队可言(mgmt_queue_device 返回
++                 * false 说明没启用/没配服务器),此时回退到老的直连行为。
++                 */
++                auto busid_u8 = busid.utf8_string();
++                if (mgmt_device_busy(busid_u8) && mgmt_queue_device(busid_u8, true)) {
++                        set_status_text(wxString::Format(
++                                L"%s 正被其他客户端使用，已加入排队，等对方释放后自动连接", busid));
++                        continue;
++                }
++
+                 if (auto err = attach(url, busid, serial, recv_mode, dev_once)) {
+                         if (err != ERROR_OPERATION_ABORTED) {
+                                 wxLogError(L"无法连接 %s/%s\n错误 %lu\n%s", 
+@@ -1263,6 +2173,10 @@ void MainFrame::attach(_In_ bool once)
+                         }
+                         break;
+                 }
++
++                // 连接成功,排队位已经没有意义,主动退出队列(服务端也会凭
++                // 心跳里的 busids 自动摘掉,这里只是让本机状态立刻一致)。
++                mgmt_queue_device(busid_u8, false);
+         }
+ }
+ 
+@@ -1337,6 +2251,10 @@ void MainFrame::on_detach(wxCommandEvent&)
+                 auto pd = make_persistent_device(tree, server, dev);
+                 (void)vhci::stop_attach_attempts(vhci.get(), &pd.location);
+ 
++                // 用户主动断开 = 不再想用这台设备,顺带退出排队。否则一旦本机
++                // 排在队首,设备空出来的那一刻又会被自动连回来,和用户意图相反。
++                mgmt_queue_device(pd.location.busid, false);
++
+                 if (auto port = get_port(dev); !port) {
+                         // 未连接(可能仍在自动重试,上面已停止其尝试)
+                 } else if (auto err = detach(port)) {
+@@ -1359,12 +2277,195 @@ void MainFrame::on_detach_all(wxCommandEvent&)
+                 wxLogError(L"无法停止连接尝试\n错误 %lu\n%s", err, GetLastErrorMsg(err));
+         }
+ 
++        // 「全部断开」表示不再自动接手任何设备,清空本机的全部排队意愿。
++        mgmt_clear_all_queues();
++
+         if (auto err = detach(vhci::port_all); err && err != ERROR_OPERATION_ABORTED) {
+                 wxLogError(L"无法断开全部设备\n错误 %lu\n%s",
+                               err, GetLastErrorMsg(err));
          }
  }
  
@@ -3296,10 +3810,20 @@ index 47dc5d1a..fa9d5ad8 100644
  wxTreeListItem MainFrame::find_or_add_server(_In_ const wxString &url)
  {
          auto &tree = *m_treeListCtrl;
-@@ -1571,17 +2616,37 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
+@@ -1571,17 +2672,109 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
          } else if (auto pos = cb.Append(host); cb.GetCount() > 32) {
                  cb.Delete(pos > 0 ? --pos : ++pos);
          }
++
++        /*
++         * 枚举完再补一次"管理接口才知道的设备"。
++         *
++         * USB/IP 的 DEVLIST 只反映服务端当前可导出的设备;一台正被别的客户端
++         * 占用的设备在某些服务端实现里会从列表里消失,于是用户根本看不到它,
++         * 也就没有入口去排队。管理接口的 /api/devices 始终会列出它(并带上
++         * 占用方和等待名单),以它为补充来源就能保证"别人在用的设备也可见"。
++         */
++        add_mgmt_only_devices(host.utf8_string(), port.utf8_string());
 +
 +        /*
 +         * 保底持久化:即便 wxEVT_TEXT/wxEVT_SPINCTRL 没触发(例如从外部命令行
@@ -3313,6 +3837,68 @@ index 47dc5d1a..fa9d5ad8 100644
 +                }
 +                cfg->Write(L"ServerPort", m_spinCtrlPort->GetValue());
 +                cfg->Flush();
++        }
++}
++
++void MainFrame::add_mgmt_only_devices(_In_ const std::string &host, _In_ const std::string &port)
++{
++        mgmt::meta_map meta;
++        {
++                std::lock_guard<std::mutex> lock(m_mgmt_mtx);
++                // 元数据必须属于本机正在连接的那台服务器,否则会把别的服务器的
++                // 设备名挂到这一棵树下。
++                if (!m_mgmt_cfg.enabled || m_mgmt_cfg.host != host) {
++                        return;
++                }
++                meta = m_mgmt_meta;
++        }
++
++        if (meta.empty()) {
++                return; // 管理接口还没拉到任何数据(或不可用):保持原有行为
++        }
++
++        usbip::device_location loc {
++                .hostname = host,
++                .service = port,
++                .busid = {},
++        };
++        auto url = make_server_url(loc);
++
++        auto &tree = *m_treeListCtrl;
++        int added_cnt = 0;
++
++        for (const auto &[busid, m] : meta) {
++                auto server = find_or_add_server(url);
++
++                bool exists = false;
++                for (auto item = tree.GetFirstChild(server); item.IsOk(); item = tree.GetNextSibling(item)) {
++                        if (tree.GetItemText(item).utf8_string() == busid) {
++                                exists = true;
++                                break;
++                        }
++                }
++                if (exists) {
++                        continue; // 枚举已经建好了这一行,交给 mgmt_apply_event 补充列
++                }
++
++                usbip::device_columns dc;
++                usbip::get_url(dc) = url;
++                dc[usbip::COL_BUSID] = wxString::FromUTF8(busid);
++                dc[usbip::COL_PRODUCT] = m.display_name; // 枚举不到描述信息,先用服务器上的显示名
++                dc[usbip::COL_STATE] = usbip::to_string(usbip::state::unplugged);
++                dc[usbip::COL_RECEIVE_MODE] = usbip::to_string(usbip::receive_mode::zero_copy);
++
++                auto [item, added] = find_or_add_device(dc);
++                if (added) {
++                        auto flags = usbip::mkflags({usbip::COL_PRODUCT, usbip::COL_STATE, usbip::COL_RECEIVE_MODE});
++                        update_device(item, dc, flags);
++                        ++added_cnt;
++                }
++        }
++
++        if (added_cnt) {
++                wxLogVerbose(L"%s: 补入 %d 台仅管理接口可见的设备", wxString::FromAscii(__func__), added_cnt);
++                update_summary();
 +        }
  }
  
@@ -3336,7 +3922,7 @@ index 47dc5d1a..fa9d5ad8 100644
  
          for (auto pos = 0; pos < cnt; ++pos) {
                  auto col = view.GetColumn(pos);
-@@ -1630,6 +2695,8 @@ void MainFrame::on_view_column(wxCommandEvent &event)
+@@ -1630,6 +2823,8 @@ void MainFrame::on_view_column(wxCommandEvent &event)
          if (auto id = event.GetId(); auto col = find_column(id)) {
                  bool checked = event.GetInt();
                  col->SetHidden(!checked);
@@ -3345,7 +3931,7 @@ index 47dc5d1a..fa9d5ad8 100644
          }
  }
  
-@@ -1657,6 +2724,11 @@ void MainFrame::on_view_labels(wxCommandEvent &)
+@@ -1657,6 +2852,11 @@ void MainFrame::on_view_labels(wxCommandEvent &)
          auto &tb = *m_auiToolBar;
          tb.ToggleWindowStyle(wxAUI_TB_TEXT);
          tb.Refresh(false);
@@ -3357,7 +3943,7 @@ index 47dc5d1a..fa9d5ad8 100644
  }
  
  int MainFrame::get_port(_In_ wxTreeListItem dev) const
-@@ -1672,9 +2744,28 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
+@@ -1672,9 +2872,28 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
  
  void MainFrame::on_flip_auto(wxCommandEvent&)
  {
@@ -3386,7 +3972,7 @@ index 47dc5d1a..fa9d5ad8 100644
          }
  }
  
-@@ -1819,8 +2910,25 @@ void MainFrame::on_reload(wxCommandEvent &event)
+@@ -1819,8 +3038,25 @@ void MainFrame::on_reload(wxCommandEvent &event)
                  flags = update_from_registry(dc, flags, cols, saved, persistent);
  
                  update_device(item, dc, flags);
@@ -3412,7 +3998,7 @@ index 47dc5d1a..fa9d5ad8 100644
          if (static bool once; !once) {
                  once = true;
                  on_load(event);
-@@ -1866,17 +2974,36 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
+@@ -1866,17 +3102,36 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
                  separator,
                  { ID_EDIT_SERIAL, m_menu_edit, &MainFrame::on_edit_serial },
                  { ID_EDIT_GEN_SERIAL, m_menu_edit, &MainFrame::on_edit_gen_serial },
@@ -3450,7 +4036,7 @@ index 47dc5d1a..fa9d5ad8 100644
          PopupMenu(m_tree_popup_menu.get());
  }
  
-@@ -1971,3 +3098,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
+@@ -1971,3 +3226,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
  
          m_status_text_pushes = 0;
  }
@@ -3460,10 +4046,19 @@ index 47dc5d1a..fa9d5ad8 100644
 +        ensure_visible_window();
 +}
 diff --git a/userspace/wusbip/wusbip.h b/userspace/wusbip/wusbip.h
-index 3e77a29d..abc0ca14 100644
+index 3e77a29d..5efcd700 100644
 --- a/userspace/wusbip/wusbip.h
 +++ b/userspace/wusbip/wusbip.h
-@@ -34,6 +34,8 @@ public:
+@@ -15,6 +15,8 @@
+ #include <mutex>
+ #include <atomic>
+ #include <map>
++#include <set>
++#include <vector>
+ #include <chrono>
+ 
+ class LogWindow;
+@@ -34,6 +36,8 @@ public:
  
  	auto start_in_tray() const noexcept { return m_start_in_tray; }
  	void iconize_to_tray();
@@ -3472,7 +4067,7 @@ index 3e77a29d..abc0ca14 100644
  
  	void on_exit(wxCommandEvent &event) override;
  	void on_detach_all(wxCommandEvent &event) override;
-@@ -47,8 +49,22 @@ private:
+@@ -47,8 +51,22 @@ private:
  
          enum { IMG_SERVER, IMG_DEVICE, IMG_CNT };
  
@@ -3495,16 +4090,22 @@ index 3e77a29d..abc0ca14 100644
  	bool m_auto_connect{true};
  	bool m_auto_connecting{};
  
-@@ -61,6 +77,8 @@ private:
+@@ -61,6 +79,14 @@ private:
          std::mutex m_mgmt_mtx;
          mgmt::settings m_mgmt_cfg;
          std::map<std::string, bool> m_mgmt_attached; // busid -> attached (current server)
++        // 本机声明"想用但当前被别人占用"的设备(busid)。每拍心跳随包上报,
++        // 由服务端维护 FIFO;设备空出后服务端回发 attach 通知,客户端自动接手。
++        std::set<std::string> m_mgmt_queued;
++        // 最近一次成功拉取到的服务器设备元数据(占用方/排队名单)。attach 路径
++        // 靠它判断"这台设备是不是被别人占用",从而决定排队还是直连。
++        mgmt::meta_map m_mgmt_meta;
 +        std::string m_mgmt_last_err;                 // 上次已提示的失败原因(去重用)
 +        bool m_wsa_started{};                        // WSAStartup 成功过,mgmt_stop 需配对 WSACleanup
  
          LogWindow *m_log{};
  	TreeListItemComparator m_tree_cmp;
-@@ -73,12 +91,16 @@ private:
+@@ -73,17 +99,26 @@ private:
  	std::thread m_read_thread{ &MainFrame::read_loop, this };
  
          int m_status_text_pushes{};
@@ -3522,7 +4123,17 @@ index 3e77a29d..abc0ca14 100644
          void on_attach_stop_all(wxCommandEvent &event) override;
          void on_detach(wxCommandEvent &event) override;
          void on_reload(wxCommandEvent &event) override;
-@@ -94,6 +116,7 @@ private:
+ 	void on_help_about(wxCommandEvent &event) override;
+ 	void add_exported_devices(wxCommandEvent &event) override;
++
++	// 把"服务端管理接口知道、但 USB/IP 设备枚举里没有"的设备补进列表。
++	// 典型场景:设备正被别的客户端占用,USB/IP 的 DEVLIST 不一定再列出它,
++	// 但用户必须能看到这台设备、看到谁在用、并据此排队。
++	void add_mgmt_only_devices(_In_ const std::string &host, _In_ const std::string &port);
+ 	void on_select_all(wxCommandEvent &event) override;
+ 	void on_has_devices_update_ui(wxUpdateUIEvent &event) override;
+ 	void on_has_selected_devices_update_ui(wxUpdateUIEvent &event) override;
+@@ -94,6 +129,7 @@ private:
  	void on_view_reset(wxCommandEvent &event) override;
  	void on_help_about_lib(wxCommandEvent&) override;
  	void on_copy_rows(wxCommandEvent &event) override;
@@ -3530,7 +4141,7 @@ index 3e77a29d..abc0ca14 100644
          void on_attach(wxCommandEvent&) override { attach(false); }
          void on_attach_once(wxCommandEvent&) override;
          void on_attach_stop(wxCommandEvent &event) override;
-@@ -142,6 +165,8 @@ private:
+@@ -142,6 +178,8 @@ private:
  
  	void on_view_appearance(wxCommandEvent &event) override;
  	void on_status_bar_timer(wxTimerEvent&);
@@ -3539,7 +4150,7 @@ index 3e77a29d..abc0ca14 100644
  
          void edit_column_dlg(
                  _In_ const wxString &title, _In_ usbip::column_pos_t col, _In_ int maxlen,
-@@ -150,8 +175,17 @@ private:
+@@ -150,8 +188,17 @@ private:
  	void init();
  	void check_view_appearance(_In_ int appearance);
  	void init_tree_list();
@@ -3557,6 +4168,34 @@ index 3e77a29d..abc0ca14 100644
  	void sync_auto_connect_menu();
  	void toggle_auto_connect(wxCommandEvent &event);
  	void schedule_auto_connect();
+@@ -175,8 +222,27 @@ private:
+ 	void mgmt_note_state(const usbip::device_state &st);
+ 	void mgmt_on_enable(wxCommandEvent &event);
+ 	void mgmt_apply_event(wxThreadEvent &event);
++	void mgmt_handle_queue_notices(_In_ const std::vector<mgmt::queue_notice> &notices);
+ 	void mgmt_loop();
+ 
++	// 加入/退出某台设备的排队。设备被别人占用时,点击「连接」不再直接失败,
++	// 而是登记排队;当前占用方释放后由服务端唤醒本机自动接手。
++	// @return false 表示管理接口未启用,调用方应回退到普通 attach
++	bool mgmt_queue_device(_In_ const std::string &busid, _In_ bool join);
++
++	// 该设备当前是否正被*别的*客户端占用(来自服务器心跳元数据)。
++	// 管理接口不可用时一律返回 false,让调用方退回普通 attach 行为。
++	bool mgmt_device_busy(_In_ const std::string &busid);
++
++	// 清空本机全部排队意愿(「全部断开」时调用),避免设备一空出来又被自动连回。
++	void mgmt_clear_all_queues();
++
++	// 在客户端退出前向服务端发一次含 shutdown=true 的最后一个心跳,
++	// 让服务端 0 延迟把设备共享态收回。否则要等 60s watchdog 才能 unbind,
++	// 这段时间里其他客户端无法看到/绑定该设备,管理页面也会看到"设备被占
++	// 用"但客户端其实已经退了。
++	void mgmt_send_goodbye();
++
+ 	void read_loop();
+ 	void break_read_loop();
+ 
 diff --git a/userspace/wusbip/wusbip.rc b/userspace/wusbip/wusbip.rc
 index ae9a0d8a..8a1b62e6 100644
 --- a/userspace/wusbip/wusbip.rc
