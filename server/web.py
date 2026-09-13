@@ -604,7 +604,48 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
             atomic_write_json(CLIENTS_FILE, {"version": 1, "clients": records})
         except OSError as exc:
             return False, f"保存客户端状态失败：{exc}", None
+
+    # 客户端主动告别:用户从托盘菜单选「退出」时,会先发一个 shutdown=true 的
+    # 心跳过来。服务端不要等 60s watchdog,直接对该 client 声称的每个设备
+    # 调 kick_device() —— 等同于管理页点「强制下线」,但 0 延迟。
+    # 注意:客户端进程退出后 vhci 驱动会自动清理本端的 attach 会话,服务端
+    # 这边 unbind+bind 主要是为了让设备共享态立刻回到可分配池,并清掉
+    # clients.json 里残留的连接方信息。
+    if isinstance(payload, dict) and payload.get("shutdown") is True:
+        handle_client_goodbye(client_id[:128], valid_busids)
+
     return True, "客户端状态已更新", record
+
+
+def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
+    """Immediately tear down a client that explicitly announced shutdown.
+
+    Removes the client record from clients.json and force-releases every busid
+    it claimed. Safe to call even if the client record is already gone (e.g.
+    a duplicate goodbye after a flaky network).
+    """
+    if not client_id:
+        return
+    log_prefix = "[usbip-share-goodbye]"
+    with STATE_LOCK:
+        raw = read_json_file(CLIENTS_FILE, {})
+        records = raw.get("clients", {}) if isinstance(raw, dict) else {}
+        if isinstance(records, dict) and client_id in records:
+            del records[client_id]
+            try:
+                atomic_write_json(CLIENTS_FILE, {"version": 1, "clients": records})
+            except OSError as exc:
+                print(f"{log_prefix} write clients.json failed: {exc}", flush=True)
+
+    for busid in busids:
+        if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
+            continue
+        ok, message = kick_device(busid)
+        print(
+            f"{log_prefix} client={client_id} busid={busid} "
+            f"{'ok - ' + message if ok else 'skipped - ' + message}",
+            flush=True,
+        )
 
 
 def connection_info(busid: str) -> list[dict[str, object]]:
