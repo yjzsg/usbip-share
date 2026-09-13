@@ -29,10 +29,30 @@ CLIENTS_FILE = Path(os.environ.get("USBIP_CLIENTS_FILE", "/run/usbip/clients.jso
 KICK_IDLE_SECONDS = int(os.environ.get("USBIP_KICK_IDLE_SECONDS", "60") or 60)
 CLIENT_TTL_SECONDS = max(45, KICK_IDLE_SECONDS + 15)
 WATCHDOG_INTERVAL_SECONDS = 10
+# A managed client heartbeats every HEARTBEAT_INTERVAL_SECONDS in the happy path;
+# the watchdog treats a single interval below this safe gap as "healthy" and
+# only starts counting missed runs once `now - last_seen` grows past it.
+# Requiring MISSED_RUN_THRESHOLD consecutive missed watchdog cycles (each
+# WATCHDOG_INTERVAL_SECONDS long) before force-releasing insulates us from
+# short network blips — one or two dropped heartbeats in a row must not
+# trigger an unbind+bind.
+EXPECTED_HEARTBEAT_SECONDS = int(
+    os.environ.get("USBIP_HEARTBEAT_INTERVAL_SECONDS", "10") or 10
+)
+HEARTBEAT_SAFE_GAP_SECONDS = EXPECTED_HEARTBEAT_SECONDS * 1.5
+MISSED_RUN_THRESHOLD = int(
+    os.environ.get("USBIP_WATCHDOG_MISSED_RUNS", "5") or 5
+)
 COMMAND_LOCK = threading.Lock()
 # Re-entrant: list_devices() (called while holding this lock) may itself
 # migrate legacy metadata, which needs the same lock.
 STATE_LOCK = threading.RLock()
+# Per-client "consecutive missed watchdog cycles" counter. Cleared whenever a
+# fresh heartbeat lands; allowed to reach MISSED_RUN_THRESHOLD before the
+# watchdog acts on it. Lives only in memory — restarts reset to zero, which is
+# the right thing (the peer will re-register immediately).
+_WATCHDOG_MISSED_RUNS: dict[str, int] = {}
+WATCHDOG_LOCK = threading.Lock()
 
 AUTH_FILE = Path(os.environ.get("USBIP_AUTH_FILE", "/etc/usbip/auth.json"))
 DEFAULT_PASSWORD = "123456"
@@ -605,6 +625,11 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
         except OSError as exc:
             return False, f"保存客户端状态失败：{exc}", None
 
+    # Any heartbeat the watchdog hasn't seen yet must reset the consecutive
+    # miss counter — keeping this in lockstep with write_client means a brief
+    # outage (e.g. the watchdog slept) can never escalate into a release.
+    reset_client_missed_run(client_id[:128])
+
     # 客户端主动告别:用户从托盘菜单选「退出」时,会先发一个 shutdown=true 的
     # 心跳过来。服务端不要等 60s watchdog,直接对该 client 声称的每个设备
     # 调 kick_device() —— 等同于管理页点「强制下线」,但 0 延迟。
@@ -646,6 +671,62 @@ def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
             f"{'ok - ' + message if ok else 'skipped - ' + message}",
             flush=True,
         )
+    # Whatever happens to the bind/unbind calls, treat an explicit goodbye as
+    # the authoritative end of this client's session — drop both its record
+    # and any in-memory watchdog counter so a fresh registration starts clean.
+    reset_client_missed_run(client_id)
+
+
+def bump_client_missed_run(client_id: str) -> int:
+    """Increment the consecutive missed-heartbeat counter for `client_id`.
+
+    Returns the new value (1 on the first miss). The first call after a
+    reset clears any stale entry from a previous session, so a reused
+    client_id can never inherit the count of a departed peer.
+    """
+    if not client_id:
+        return 0
+    with WATCHDOG_LOCK:
+        _WATCHDOG_MISSED_RUNS[client_id] = _WATCHDOG_MISSED_RUNS.get(client_id, 0) + 1
+        return _WATCHDOG_MISSED_RUNS[client_id]
+
+
+def reset_client_missed_run(client_id: str) -> None:
+    """Forget any in-flight heartbeat-missed-run count for `client_id`."""
+    if not client_id:
+        return
+    with WATCHDOG_LOCK:
+        _WATCHDOG_MISSED_RUNS.pop(client_id, None)
+
+
+def prune_stale_missed_runs(live_client_ids: set[str]) -> None:
+    """Drop counters for client_ids that no longer have any claim."""
+    with WATCHDOG_LOCK:
+        for stale in [key for key in _WATCHDOG_MISSED_RUNS if key not in live_client_ids]:
+            _WATCHDOG_MISSED_RUNS.pop(stale, None)
+
+
+def remove_client_record(client_id: str) -> bool:
+    """Atomically delete a client from clients.json under STATE_LOCK.
+
+    Returns True when the record existed and was removed. Used by the watchdog
+    once MISSED_RUN_THRESHOLD consecutive missed heartbeats force a release, so
+    the UI stops advertising a dead peer.
+    """
+    if not client_id:
+        return False
+    with STATE_LOCK:
+        raw = read_json_file(CLIENTS_FILE, {})
+        records = raw.get("clients", {}) if isinstance(raw, dict) else {}
+        if not isinstance(records, dict) or client_id not in records:
+            return False
+        del records[client_id]
+        try:
+            atomic_write_json(CLIENTS_FILE, {"version": 1, "clients": records})
+        except OSError as exc:
+            print(f"[usbip-share-watchdog] write clients.json failed: {exc}", flush=True)
+            return False
+    return True
 
 
 def connection_info(busid: str) -> list[dict[str, object]]:
@@ -1135,58 +1216,85 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def watchdog_loop() -> None:
-    """Periodically release devices whose claiming client stopped heartbeating.
+    """Force-release devices when their claiming client stops heartbeating.
 
     A client that powers off without detaching can leave the USB/IP import
     held server-side for a long time (TCP keepalive only notices eventually).
-    Since every managed client heartbeats every 10s, a stale claim means the
-    client is likely gone; we unbind+rebind to force the import down while
-    keeping the device shared.
+    Managed clients post a heartbeat every EXPECTED_HEARTBEAT_SECONDS on the
+    happy path. To survive ordinary network jitter we now require
+    MISSED_RUN_THRESHOLD *consecutive* watchdog cycles (each
+    WATCHDOG_INTERVAL_SECONDS long) with no fresh heartbeat before any
+    unbind+bind fires. Explicit `shutdown:true` goodbyes take a separate,
+    immediate path via handle_client_goodbye and bypass this counter.
     """
     log_prefix = "[usbip-share-watchdog]"
     while True:
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
         try:
             records = read_client_records()
-            if not records:
-                continue
             now = time.time()
-            # busid -> latest lastSeen among clients claiming it
-            claims: dict[str, float] = {}
-            for record in records.values():
-                busids = record.get("busids", [])
-                if not isinstance(busids, list):
-                    continue
+            live_ids: set[str] = set()
+            for client_id, record in records.items():
+                live_ids.add(client_id)
                 try:
                     last_seen = float(record.get("lastSeen", 0))
                 except (TypeError, ValueError):
                     last_seen = 0
-                for busid in busids:
-                    if not isinstance(busid, str):
-                        continue
-                    if busid not in claims or last_seen > claims[busid]:
-                        claims[busid] = last_seen
-
-            if not claims:
-                continue
-
-            rc, output = run_usbip("list", "-l")
-            if rc != 0:
-                continue
-            shared_busids = set()
-            for line in output.splitlines():
-                match = BUS_RE.match(line)
-                if match:
-                    shared_busids.add(match.group(1))
-
-            for busid, last_seen in claims.items():
-                if busid not in shared_busids:
+                busids_raw = record.get("busids", [])
+                busids = (
+                    [item for item in busids_raw if isinstance(item, str)]
+                    if isinstance(busids_raw, list)
+                    else []
+                )
+                gap = now - last_seen
+                if gap <= HEARTBEAT_SAFE_GAP_SECONDS:
+                    # Fresh heartbeat within the safe envelope: zero the miss
+                    # counter for this client and move on.
+                    reset_client_missed_run(client_id)
                     continue
-                if now - last_seen <= KICK_IDLE_SECONDS:
+                missed = bump_client_missed_run(client_id)
+                if missed < MISSED_RUN_THRESHOLD:
+                    # Still inside the redundancy window — log it so operators
+                    # can see the counter climbing, but do not touch devices.
+                    print(
+                        f"{log_prefix} client={client_id} no heartbeat for "
+                        f"{gap:.0f}s (missed_run={missed}/"
+                        f"{MISSED_RUN_THRESHOLD}, "
+                        f"busids={','.join(busids) or '-'})",
+                        flush=True,
+                    )
                     continue
-                print(f"{log_prefix} device {busid} has no heartbeat for >{KICK_IDLE_SECONDS}s, force-releasing", flush=True)
-                ok, message = kick_device(busid)
-                print(f"{log_prefix} device {busid}: {'ok - ' + message if ok else 'failed - ' + message}", flush=True)
+                # Threshold hit: the client has missed MISSED_RUN_THRESHOLD
+                # consecutive watchdog cycles. Force-release anything it still
+                # claims and drop its record so the UI stops showing it.
+                print(
+                    f"{log_prefix} client={client_id} missed "
+                    f"{missed} consecutive heartbeats (>= "
+                    f"{HEARTBEAT_SAFE_GAP_SECONDS:g}s gap each, "
+                    f"busids={','.join(busids) or '-'}), force-releasing",
+                    flush=True,
+                )
+                claimed_busids = [
+                    busid for busid in busids if SAFE_BUSID_RE.fullmatch(busid)
+                ]
+                removed = remove_client_record(client_id)
+                reset_client_missed_run(client_id)
+                if not claimed_busids:
+                    if removed:
+                        print(
+                            f"{log_prefix} client={client_id} record purged "
+                            "(no live busids)",
+                            flush=True,
+                        )
+                    continue
+                for busid in claimed_busids:
+                    ok, message = kick_device(busid)
+                    print(
+                        f"{log_prefix} client={client_id} busid={busid} "
+                        f"{'ok - ' + message if ok else 'failed - ' + message}",
+                        flush=True,
+                    )
+            prune_stale_missed_runs(live_ids)
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             print(f"{log_prefix} error: {exc}", flush=True)
 
