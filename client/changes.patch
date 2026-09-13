@@ -4380,7 +4380,7 @@ index 3e77a29d..46da2cf8 100644
  	void break_read_loop();
  
 diff --git a/userspace/wusbip/wusbip.rc b/userspace/wusbip/wusbip.rc
-index ae9a0d8a..5d9088c9 100644
+index ae9a0d8a..b8a4623c 100644
 --- a/userspace/wusbip/wusbip.rc
 +++ b/userspace/wusbip/wusbip.rc
 @@ -75,13 +75,13 @@ BEGIN
@@ -4402,6 +4402,25 @@ index ae9a0d8a..5d9088c9 100644
              VALUE "ProductVersion", "0.9.8.0"
          END
      END
+@@ -211,9 +211,15 @@ ATTACH_STOP_ALL_SVG_DARK RCDATA                  "resources/attach_stop_all_dark
+ 
+ // Icon with lowest ID value placed first to ensure application icon
+ // remains consistent on all systems.
+-AAAAAAAA                ICON                    "resources/USBip.ico"
+-
+-USBIP                   ICON                    "resources/USBip.ico"
++//
++// 名字必须与代码里 SetIcon(wxIcon(L"USBip")) / TaskBarIcon 的查找名一致,
++// 否则运行时按名找不到资源 -> 回退到 wxWidgets 默认图标(任务栏/标题栏显示
++// 上游的默认图)。原先这里写的是未定义的符号 AAAAAAAA / USBIP: rc 编译时
++// 它们退化成数字 0(文件图标仍能显示),但按名查 "USBip" 会失败。
++USBip                   ICON                    "resources/USBip.ico"
++
++// 保留一个数字 ID(最低值优先),确保资源管理器/Shell 取到的应用图标稳定。
++1                       ICON                    "resources/USBip.ico"
+ 
+ #endif    // English (United States) resources
+ /////////////////////////////////////////////////////////////////////////////
 diff --git a/userspace/wusbip/wusbip.vcxproj b/userspace/wusbip/wusbip.vcxproj
 index 636d6c39..6c8f0fcb 100644
 --- a/userspace/wusbip/wusbip.vcxproj
