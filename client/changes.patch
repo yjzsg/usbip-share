@@ -2434,7 +2434,7 @@ index 5df6e8ef..3299b7bc 100644
          default:
                  s = wxString::FromAscii(vhci::get_state_str(state));
 diff --git a/userspace/wusbip/wusbip.cpp b/userspace/wusbip/wusbip.cpp
-index 47dc5d1a..c35ab342 100644
+index 47dc5d1a..177ede53 100644
 --- a/userspace/wusbip/wusbip.cpp
 +++ b/userspace/wusbip/wusbip.cpp
 @@ -26,7 +26,12 @@
@@ -3377,10 +3377,20 @@ index 47dc5d1a..c35ab342 100644
          }
  
          CallAfter([this]
-@@ -713,6 +1485,18 @@ void MainFrame::schedule_auto_connect()
+@@ -713,9 +1485,98 @@ void MainFrame::schedule_auto_connect()
                  wxCommandEvent evt;
                  add_exported_devices(evt);
                  m_auto_connecting = false;
++
++                /*
++                 * 枚举完成后,把 Auto 列已勾选的设备真正挂载起来。
++                 *
++                 * add_exported_devices() 只做 OPCODE_LIST(拉列表),不会 attach;
++                 * 驱动层的 PersistentDevices 也只在驱动重新加载时才自动挂载。
++                 * 两者之间原先没有衔接,所以"勾了自动连接"的设备重启客户端后
++                 * 一直停在"未连接"。这里补上这一步。
++                 */
++                attach_persistent_devices(m_comboBoxServer->GetValue());
 +
 +                /*
 +                 * 唤醒心跳线程:让 "服务端管理页面" 在自动连接完成后的下一个循环里
@@ -3396,7 +3406,77 @@ index 47dc5d1a..c35ab342 100644
          });
  }
  
-@@ -736,11 +1520,29 @@ void MainFrame::on_close(wxCloseEvent &event)
++void MainFrame::attach_persistent_devices(_In_ const wxString &url)
++{
++        if (url.empty()) {
++                return;
++        }
++
++        auto persistent = get_persistent();
++        if (persistent.empty()) {
++                return;
++        }
++
++        /*
++         * 只处理属于当前服务器的记录。
++         *
++         * make_server_url() 的规范化结果与 persistent_device.location 里
++         * 存的字符串可能不完全一致(用户手动输入的 ServerAddr 大小写、尾部
++         * 空格等),这里统一走 make_server_url 归一后再比,避免因为字符串
++         * 细节不同而漏掉本该挂载的设备。
++         */
++        auto target = url;
++        if (!target.Contains(L':')) {
++                target += wxString::Format(L":%d", m_spinCtrlPort->GetValue());
++        }
++        auto target_url = wxString(target).Lower();
++
++        int attached = 0;
++
++        for (auto &pd: persistent) {
++                auto host = wxString::FromUTF8(pd.location.hostname);
++                auto service = wxString::FromUTF8(pd.location.service);
++                if (host.empty() || service.empty()) {
++                        continue;
++                }
++
++                auto dev_url = wxString::Format(L"%s:%s", host, service).Lower();
++                if (dev_url != target_url) {
++                        continue;
++                }
++
++                auto busid = wxString::FromUTF8(pd.location.busid);
++                if (busid.empty()) {
++                        continue;
++                }
++
++                /*
++                 * Auto 设备 = 持续连接(once=false),允许驱动在断线后自愈。
++                 * 与用户双击/菜单「连接」的语义一致(见 attach(bool) 里
++                 * dev_once = once || !is_persistent(dev))。
++                 */
++                if (auto err = attach(wxString::Format(L"%s:%s", host, service), busid,
++                                      wxString::FromUTF8(pd.serial),
++                                      to_string(pd.recv_mode), false)) {
++                        if (err != ERROR_OPERATION_ABORTED) {
++                                wxLogVerbose(L"自动连接(Auto)设备 %s/%s 挂载失败\n错误 %lu\n%s",
++                                             dev_url, busid, err, GetLastErrorMsg(err));
++                        }
++                        continue;
++                }
++
++                ++attached;
++        }
++
++        if (attached > 0) {
++                set_status_text(wxString::Format(L"已自动连接 %d 个设备", attached));
++        }
++}
++
+ void MainFrame::post_refresh()
+ {
+         wxCommandEvent evt(wxEVT_COMMAND_MENU_SELECTED, wxID_REFRESH);
+@@ -736,11 +1597,29 @@ void MainFrame::on_close(wxCloseEvent &event)
  
          // 未勾选「关闭时直接退出」:点 × 收进系统托盘后台常驻(角标保留)
          if (!m_close_to_tray && event.CanVeto()) {
@@ -3427,7 +3507,7 @@ index 47dc5d1a..c35ab342 100644
          break_read_loop();
          m_read_thread.join();
          mgmt_stop();
-@@ -763,16 +1565,67 @@ void MainFrame::on_exit(wxCommandEvent&)
+@@ -763,16 +1642,67 @@ void MainFrame::on_exit(wxCommandEvent&)
          Close(true);
  }
  
@@ -3495,7 +3575,7 @@ index 47dc5d1a..c35ab342 100644
  void MainFrame::ensure_taskbar_icon()
  {
          if (!m_taskbar_icon) {
-@@ -780,12 +1633,65 @@ void MainFrame::ensure_taskbar_icon()
+@@ -780,12 +1710,65 @@ void MainFrame::ensure_taskbar_icon()
          }
  
          if (m_taskbar_icon->IsIconInstalled()) {
@@ -3563,7 +3643,7 @@ index 47dc5d1a..c35ab342 100644
  }
  
  void MainFrame::on_local_name(wxCommandEvent&)
-@@ -881,7 +1787,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -881,7 +1864,7 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          mgmt_note_state(st);
  
          if (m_taskbar_icon && m_taskbar_icon->IsIconInstalled()) {
@@ -3572,7 +3652,7 @@ index 47dc5d1a..c35ab342 100644
                  m_taskbar_icon->show_balloon(s);
          }
  
-@@ -914,20 +1820,9 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
+@@ -914,20 +1897,9 @@ void MainFrame::on_device_state(_In_ DeviceStateEvent &event)
          auto [dc, flags] = make_device_columns(st);
          wxASSERT(flags);
  
@@ -3596,7 +3676,7 @@ index 47dc5d1a..c35ab342 100644
  
          if (auto &port = dc[COL_PORT]; !port.empty() && is_port_residual(st.state)) {
                  port.clear();
-@@ -1256,6 +2151,21 @@ void MainFrame::attach(_In_ bool once)
+@@ -1256,6 +2228,21 @@ void MainFrame::attach(_In_ bool once)
                  //     不做后台偷偷重连;需要自愈就在该行勾 Auto)
                  auto dev_once = once || !is_persistent(dev);
  
@@ -3618,7 +3698,7 @@ index 47dc5d1a..c35ab342 100644
                  if (auto err = attach(url, busid, serial, recv_mode, dev_once)) {
                          if (err != ERROR_OPERATION_ABORTED) {
                                  wxLogError(L"无法连接 %s/%s\n错误 %lu\n%s", 
-@@ -1263,6 +2173,10 @@ void MainFrame::attach(_In_ bool once)
+@@ -1263,6 +2250,10 @@ void MainFrame::attach(_In_ bool once)
                          }
                          break;
                  }
@@ -3629,7 +3709,7 @@ index 47dc5d1a..c35ab342 100644
          }
  }
  
-@@ -1337,6 +2251,10 @@ void MainFrame::on_detach(wxCommandEvent&)
+@@ -1337,6 +2328,10 @@ void MainFrame::on_detach(wxCommandEvent&)
                  auto pd = make_persistent_device(tree, server, dev);
                  (void)vhci::stop_attach_attempts(vhci.get(), &pd.location);
  
@@ -3640,7 +3720,7 @@ index 47dc5d1a..c35ab342 100644
                  if (auto port = get_port(dev); !port) {
                          // 未连接(可能仍在自动重试,上面已停止其尝试)
                  } else if (auto err = detach(port)) {
-@@ -1359,12 +2277,195 @@ void MainFrame::on_detach_all(wxCommandEvent&)
+@@ -1359,12 +2354,195 @@ void MainFrame::on_detach_all(wxCommandEvent&)
                  wxLogError(L"无法停止连接尝试\n错误 %lu\n%s", err, GetLastErrorMsg(err));
          }
  
@@ -3836,7 +3916,7 @@ index 47dc5d1a..c35ab342 100644
  wxTreeListItem MainFrame::find_or_add_server(_In_ const wxString &url)
  {
          auto &tree = *m_treeListCtrl;
-@@ -1571,17 +2672,162 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
+@@ -1571,17 +2749,162 @@ void MainFrame::add_exported_devices(wxCommandEvent&)
          } else if (auto pos = cb.Append(host); cb.GetCount() > 32) {
                  cb.Delete(pos > 0 ? --pos : ++pos);
          }
@@ -4001,7 +4081,7 @@ index 47dc5d1a..c35ab342 100644
  
          for (auto pos = 0; pos < cnt; ++pos) {
                  auto col = view.GetColumn(pos);
-@@ -1630,6 +2876,8 @@ void MainFrame::on_view_column(wxCommandEvent &event)
+@@ -1630,6 +2953,8 @@ void MainFrame::on_view_column(wxCommandEvent &event)
          if (auto id = event.GetId(); auto col = find_column(id)) {
                  bool checked = event.GetInt();
                  col->SetHidden(!checked);
@@ -4010,7 +4090,7 @@ index 47dc5d1a..c35ab342 100644
          }
  }
  
-@@ -1657,6 +2905,11 @@ void MainFrame::on_view_labels(wxCommandEvent &)
+@@ -1657,6 +2982,11 @@ void MainFrame::on_view_labels(wxCommandEvent &)
          auto &tb = *m_auiToolBar;
          tb.ToggleWindowStyle(wxAUI_TB_TEXT);
          tb.Refresh(false);
@@ -4022,7 +4102,7 @@ index 47dc5d1a..c35ab342 100644
  }
  
  int MainFrame::get_port(_In_ wxTreeListItem dev) const
-@@ -1672,9 +2925,28 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
+@@ -1672,9 +3002,28 @@ int MainFrame::get_port(_In_ wxTreeListItem dev) const
  
  void MainFrame::on_flip_auto(wxCommandEvent&)
  {
@@ -4051,7 +4131,7 @@ index 47dc5d1a..c35ab342 100644
          }
  }
  
-@@ -1819,8 +3091,25 @@ void MainFrame::on_reload(wxCommandEvent &event)
+@@ -1819,8 +3168,25 @@ void MainFrame::on_reload(wxCommandEvent &event)
                  flags = update_from_registry(dc, flags, cols, saved, persistent);
  
                  update_device(item, dc, flags);
@@ -4077,7 +4157,7 @@ index 47dc5d1a..c35ab342 100644
          if (static bool once; !once) {
                  once = true;
                  on_load(event);
-@@ -1866,17 +3155,36 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
+@@ -1866,17 +3232,36 @@ std::unique_ptr<wxMenu> MainFrame::create_tree_popup_menu()
                  separator,
                  { ID_EDIT_SERIAL, m_menu_edit, &MainFrame::on_edit_serial },
                  { ID_EDIT_GEN_SERIAL, m_menu_edit, &MainFrame::on_edit_gen_serial },
@@ -4115,7 +4195,7 @@ index 47dc5d1a..c35ab342 100644
          PopupMenu(m_tree_popup_menu.get());
  }
  
-@@ -1971,3 +3279,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
+@@ -1971,3 +3356,8 @@ void MainFrame::on_status_bar_timer(wxTimerEvent&)
  
          m_status_text_pushes = 0;
  }
@@ -4125,7 +4205,7 @@ index 47dc5d1a..c35ab342 100644
 +        ensure_visible_window();
 +}
 diff --git a/userspace/wusbip/wusbip.h b/userspace/wusbip/wusbip.h
-index 3e77a29d..57d08d43 100644
+index 3e77a29d..46da2cf8 100644
 --- a/userspace/wusbip/wusbip.h
 +++ b/userspace/wusbip/wusbip.h
 @@ -15,6 +15,8 @@
@@ -4233,7 +4313,7 @@ index 3e77a29d..57d08d43 100644
  
          void edit_column_dlg(
                  _In_ const wxString &title, _In_ usbip::column_pos_t col, _In_ int maxlen,
-@@ -150,8 +192,17 @@ private:
+@@ -150,12 +192,34 @@ private:
  	void init();
  	void check_view_appearance(_In_ int appearance);
  	void init_tree_list();
@@ -4251,7 +4331,24 @@ index 3e77a29d..57d08d43 100644
  	void sync_auto_connect_menu();
  	void toggle_auto_connect(wxCommandEvent &event);
  	void schedule_auto_connect();
-@@ -175,8 +226,27 @@ private:
+ 
++	/*
++	 * 启动/刷新后,把"自动(Auto)列已勾选"的设备真正挂载起来。
++	 *
++	 * 背景:「文件 → 启动时自动连接」原先只做到"连上服务器 + 枚举设备列表",
++	 * 勾选的 Auto 设备虽然带着 ✓,却从来没有被 attach —— 驱动的
++	 * PersistentDevices 只在驱动重新加载时才自动挂载,普通重启客户端不触发。
++	 * 于是"设置了自动连接却没连上"。
++	 *
++	 * @param url 服务器 URL(形如 host:port);只挂载属于这台服务器的记录,
++	 *            避免把别的服务器的设备挂到当前这棵树下。
++	 */
++	void attach_persistent_devices(_In_ const wxString &url);
++
+         // Auto-start on Windows logon (HKCU ...\Run) -- see wusbip.cpp
+         void on_auto_start(wxCommandEvent &event);
+         void sync_auto_start_menu();
+@@ -175,8 +239,27 @@ private:
  	void mgmt_note_state(const usbip::device_state &st);
  	void mgmt_on_enable(wxCommandEvent &event);
  	void mgmt_apply_event(wxThreadEvent &event);
