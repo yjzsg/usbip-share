@@ -2177,6 +2177,9 @@ index 3d3d6934..4708b7ba 100644
 -     style="fill:#ffd42a" />
 +     style="fill:#70B7E6" />
  </svg>
+diff --git a/userspace/wusbip/resources/USBip.ico b/userspace/wusbip/resources/USBip.ico
+index ff4646c8..fa5c9e35 100644
+Binary files a/userspace/wusbip/resources/USBip.ico and b/userspace/wusbip/resources/USBip.ico differ
 diff --git a/userspace/wusbip/resources/app.manifest b/userspace/wusbip/resources/app.manifest
 index d3dc47da..64bcd28a 100644
 --- a/userspace/wusbip/resources/app.manifest
@@ -4377,18 +4380,28 @@ index 3e77a29d..46da2cf8 100644
  	void break_read_loop();
  
 diff --git a/userspace/wusbip/wusbip.rc b/userspace/wusbip/wusbip.rc
-index ae9a0d8a..8a1b62e6 100644
+index ae9a0d8a..5d9088c9 100644
 --- a/userspace/wusbip/wusbip.rc
 +++ b/userspace/wusbip/wusbip.rc
-@@ -76,7 +76,7 @@ BEGIN
+@@ -75,13 +75,13 @@ BEGIN
+     BEGIN
          BLOCK "040004b0"
          BEGIN
-             VALUE "CompanyName", "usbip-win2"
+-            VALUE "CompanyName", "usbip-win2"
 -            VALUE "FileDescription", "USBip"
-+            VALUE "FileDescription", "USB-SHARE Client"
++            VALUE "CompanyName", "USB-SHARE"
++            VALUE "FileDescription", "USB-SHARE 客户端"
              VALUE "FileVersion", "0.9.8.0"
-             VALUE "InternalName", "wusbip.exe"
+-            VALUE "InternalName", "wusbip.exe"
++            VALUE "InternalName", "USB-SHARE-客户端.exe"
              VALUE "LegalCopyright", "Copyright (c) 2022-2026 Vadym Hrynchyshyn <vadimgrn@gmail.com>"
+-            VALUE "OriginalFilename", "wusbip.exe"
+-            VALUE "ProductName", "USBip"
++            VALUE "OriginalFilename", "USB-SHARE-客户端.exe"
++            VALUE "ProductName", "USB-SHARE"
+             VALUE "ProductVersion", "0.9.8.0"
+         END
+     END
 diff --git a/userspace/wusbip/wusbip.vcxproj b/userspace/wusbip/wusbip.vcxproj
 index 636d6c39..6c8f0fcb 100644
 --- a/userspace/wusbip/wusbip.vcxproj

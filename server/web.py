@@ -23,6 +23,8 @@ BUS_RE = re.compile(r"^\s*-\s+busid\s+(\S+)\s+\(([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\
 SAFE_BUSID_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 BASE_DIR = Path(__file__).resolve().parent
 INDEX_FILE = BASE_DIR / "index.html"
+# 与客户端 exe / 安装包同源的图标，保证浏览器标签页也一致。
+FAVICON_FILE = BASE_DIR / "favicon.ico"
 MANAGED_FILE = Path(os.environ.get("USBIP_MANAGED_FILE", "/run/usbip/managed-busids"))
 METADATA_FILE = Path(os.environ.get("USBIP_METADATA_FILE", "/etc/usbip/device-metadata.json"))
 CLIENTS_FILE = Path(os.environ.get("USBIP_CLIENTS_FILE", "/run/usbip/clients.json"))
@@ -1571,10 +1573,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if path == "/favicon.ico":
+            # 与客户端 exe、安装包使用同一枚图标，浏览器标签页也保持一致。
+            try:
+                body = FAVICON_FILE.read_bytes()
+            except OSError:
+                self.send_json({"ok": False, "error": "图标文件不存在"}, HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/x-icon")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if path == "/api/health":
             self.send_json({"ok": True, "service": "usbip-share-web"})
             return
-
         if path == "/api/devices":
             # Client read path is intentionally password-free: the Windows
             # client must be able to list devices without the admin password.

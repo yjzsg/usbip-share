@@ -13,6 +13,7 @@ COPY healthcheck.sh /usr/local/bin/usbip-share-healthcheck
 COPY web.py /opt/usbip-share/web.py
 COPY gateway.py /opt/usbip-share/gateway.py
 COPY index.html /opt/usbip-share/index.html
+COPY favicon.ico /opt/usbip-share/favicon.ico
 
 RUN chmod 0755 /usr/local/bin/usbip-share-entrypoint /usr/local/bin/usbip-share-healthcheck \
     && mkdir -p /etc/usbip /run/usbip /opt/usbip-share

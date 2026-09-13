@@ -61,6 +61,8 @@ services:
       # registry accelerator answers 401).
       - ./web.py:/opt/usbip-share/web.py:ro
       - ./index.html:/opt/usbip-share/index.html:ro
+      # 与客户端 exe / 安装包同源的图标（浏览器标签页 + 页面 logo）。
+      - ./favicon.ico:/opt/usbip-share/favicon.ico:ro
 
     healthcheck:
       test: ["CMD", "/usr/local/bin/usbip-share-healthcheck"]

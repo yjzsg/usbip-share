@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>USB/IP 设备共享</title>
+  <title>USB-SHARE 设备共享</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
   <style>
     :root {
       color-scheme: light;
@@ -31,7 +33,8 @@
     .wrap { max-width: 1400px; margin: 0 auto; padding: 28px 18px 48px; }
     .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
     .brand { display: flex; align-items: center; gap: 12px; }
-    .logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #1a7bf2, #1251b8); font-size: 13px; font-weight: 700; box-shadow: 0 6px 14px rgba(23, 105, 224, .24); }
+    .logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #24304f, #16203a); font-size: 10px; font-weight: 700; letter-spacing: .2px; box-shadow: 0 6px 14px rgba(22, 32, 58, .3); }
+    .logo img { width: 30px; height: 30px; display: block; border-radius: 7px; }
     h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
     .subtitle { margin: 3px 0 0; color: var(--muted); }
     .card { background: var(--card); border: 1px solid rgba(228, 233, 240, .9); border-radius: 14px; box-shadow: var(--shadow); }
@@ -124,10 +127,10 @@
   <main class="wrap" id="mainApp" hidden>
     <header class="top">
       <div class="brand">
-        <div class="logo" aria-hidden="true">USB/IP</div>
+        <div class="logo" aria-hidden="true"><img src="/favicon.ico" alt=""></div>
         <div>
-          <h1>USB/IP 设备共享</h1>
-          <p class="subtitle">USB/IP 服务端管理</p>
+          <h1>USB-SHARE 设备共享</h1>
+          <p class="subtitle">USB-SHARE 服务端管理</p>
         </div>
       </div>
       <div>
@@ -192,7 +195,7 @@
 
   <div class="modal" id="loginModal" hidden>
     <section class="card center-card" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
-      <h2 id="loginTitle">USB/IP 设备共享</h2>
+      <h2 id="loginTitle">USB-SHARE 设备共享</h2>
       <p>请输入管理密码登录</p>
       <div class="field">
         <label for="loginPass">管理密码</label>

@@ -1,4 +1,4 @@
-# USB/IP 服务端（Docker Compose）
+# USB-SHARE 服务端（Docker Compose）
 
 在 Linux NAS / 主机上把物理 USB 设备共享给局域网内的 Windows 客户端。
 对外只需要**一个端口**：USB/IP 数据协议与中文管理页（含管理 API）共用它。
