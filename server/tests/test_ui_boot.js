@@ -38,6 +38,11 @@ function makeDom() {
     elements,
     document: {
       hidden: false,
+      documentElement: {
+        attrs: new Map(),
+        setAttribute(name, value) { this.attrs.set(name, String(value)); },
+        getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; },
+      },
       getElementById(id) {
         assert.ok(elements.has(id), '脚本引用的 HTML 元素必须存在：' + id);
         return elements.get(id);
@@ -64,6 +69,7 @@ async function run(options = {}) {
   const store = new Map();
   if (opts.storedToken !== null) store.set('usbip-share-token', opts.storedToken);
   if (opts.legacyToken) store.set('fnos-usbip-token', opts.legacyToken);
+  if (opts.storedTheme) store.set('usbip-share-theme', opts.storedTheme);
   const calls = [];
   const intervals = [];
   const alerts = [];
@@ -93,6 +99,7 @@ async function run(options = {}) {
     setInterval: callback => { intervals.push(callback); return 1; },
     alert: message => alerts.push(message),
     confirm: () => true,
+    matchMedia: query => ({matches: Boolean(opts.systemDark) && /prefers-color-scheme:\s*dark/.test(query)}),
     console,
   };
   sandbox.window = sandbox;
@@ -329,6 +336,21 @@ async function run(options = {}) {
   await settle();
   check('未启用访问密码时显示未启用', r.el('accessState').textContent.includes('未启用'));
   check('读取失败时不抛异常，只显示占位', r.el('accessList').innerHTML.length >= 0);
+
+  console.log('[I] 深色 / 浅色切换');
+  r = await run();
+  check('没有历史选择时跟随系统（浅色）', r.dom.document.documentElement.getAttribute('data-theme') === 'light');
+  r.el('themeBtn').onclick();
+  check('点一次切到深色并记住', r.dom.document.documentElement.getAttribute('data-theme') === 'dark'
+    && r.store.get('usbip-share-theme') === 'dark');
+  r.el('themeBtn').onclick();
+  check('再点一次切回浅色', r.dom.document.documentElement.getAttribute('data-theme') === 'light');
+  r = await run({systemDark: true});
+  check('系统是深色时初始就是深色', r.dom.document.documentElement.getAttribute('data-theme') === 'dark');
+  r = await run({systemDark: true, storedTheme: 'light'});
+  check('用户选过浅色时优先于系统', r.dom.document.documentElement.getAttribute('data-theme') === 'light');
+  r = await run({systemDark: false, storedTheme: 'dark'});
+  check('用户选过深色时优先于系统', r.dom.document.documentElement.getAttribute('data-theme') === 'dark');
 
   const passed = results.filter(Boolean).length;
   console.log('\n总计: ' + passed + '/' + results.length + ' 通过');
