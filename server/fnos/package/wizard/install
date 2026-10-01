@@ -4,7 +4,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "USB/IP 数据协议与中文管理页<b>共用同一个端口</b>。Windows 客户端连接「飞牛 IP:该端口」。请确认该端口没有被其它应用占用。"
+                "helpText": "USB/IP 数据协议与中文管理页<b>共用同一个端口</b>。Windows 客户端连接「飞牛 IP:该端口」，飞牛桌面小窗打开的也是它。请确认该端口没有被其它应用占用。"
             },
             {
                 "type": "text",
@@ -46,24 +46,34 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "开启后，Windows 客户端连接这台服务器时必须先输入这个密码换取授权，否则它发起的 USB/IP 数据连接会被直接拒绝。<br>注意它和管理页密码是两回事：管理页密码只保护这个网页。"
+                "helpText": "启用后，Windows 客户端连接这台服务器时必须先输入这个密码换取授权，否则它发起的 USB/IP 数据连接会被直接拒绝。<br>注意它和管理页密码是两回事：管理页密码只保护这个网页。"
             },
             {
-                "type": "switch",
-                "field": "access_enabled",
-                "label": "启用共享访问密码",
-                "initValue": "false",
-                "helpText": "默认关闭。关闭时任何客户端都能直接连接（与旧版本行为一致）。"
+                "type": "radio",
+                "field": "access_mode",
+                "label": "是否启用共享访问密码",
+                "initValue": "disable",
+                "options": [
+                    {
+                        "label": "不启用（任何客户端都能直接连接，与旧版本一致）",
+                        "value": "disable"
+                    },
+                    {
+                        "label": "启用（客户端连接时要输入密码）",
+                        "value": "enable"
+                    }
+                ]
             },
             {
                 "type": "password",
                 "field": "access_password",
-                "label": "访问密码（启用时必填）",
-                "helpText": "8-64 位。客户端首次连接时会弹框要求输入；之后凭授权连接，过期后自动重新验证。",
+                "label": "共享访问密码",
+                "initValue": "",
+                "helpText": "选择「启用」时必填，8-64 位；选择「不启用」时留空。装好后可在「应用设置」里改。",
                 "rules": [
                     {
                         "pattern": "^$|^.{8,64}$",
-                        "message": "留空表示不设置；否则长度需为 8-64 位"
+                        "message": "选择「启用」时请填 8-64 位密码；选择「不启用」时留空"
                     }
                 ]
             }
@@ -74,28 +84,55 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "这里不需要预先指定设备：装好后打开管理页，对着要共享的设备点「开始共享」即可。默认重启后会自动恢复上次共享的那几台。"
+                "helpText": "这里不需要预先指定设备：装好后打开管理页，对着要共享的设备点「开始共享」即可。"
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "restore_shared",
                 "label": "重启后自动恢复上次共享的设备",
-                "initValue": "true",
-                "helpText": "关闭后每次启动都是「不共享任何设备」，需要到管理页重新点一遍。"
+                "initValue": "enable",
+                "options": [
+                    {
+                        "label": "启用（推荐：重启后自动恢复，不用每次重新点）",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "不启用（每次启动都是「不共享任何设备」）",
+                        "value": "disable"
+                    }
+                ]
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "load_module",
                 "label": "启动时加载宿主内核模块 usbip_host",
-                "initValue": "true",
-                "helpText": "关闭后需要你自己在飞牛宿主上执行 modprobe usbip_host。"
+                "initValue": "enable",
+                "options": [
+                    {
+                        "label": "启用（推荐）",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "不启用（你自己在飞牛宿主上 modprobe usbip_host）",
+                        "value": "disable"
+                    }
+                ]
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "unbind_on_exit",
                 "label": "停止应用时把 USB 设备归还给原驱动",
-                "initValue": "false",
-                "helpText": "开启前请先断开已连接的 Windows 客户端，否则可能出现设备占用异常。"
+                "initValue": "disable",
+                "options": [
+                    {
+                        "label": "不启用（推荐：停止应用后设备仍保持绑定）",
+                        "value": "disable"
+                    },
+                    {
+                        "label": "启用（停止应用时归还给原驱动；请先断开已连接的 Windows 客户端）",
+                        "value": "enable"
+                    }
+                ]
             }
         ]
     },

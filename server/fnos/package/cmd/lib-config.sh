@@ -55,12 +55,17 @@ usbshare_valid_port() {
     [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
-# switch 字段在不同版本里可能是布尔或字符串；空/无法识别 = 保持当前值。
-usbshare_pick_bool() {
+# 布尔字段的三态：keep（保持不变）/ enable（打开）/ disable（关闭）。
+#
+# 为什么不用飞牛的 switch：真机上实测 switch 的"打开"状态**传不到脚本里** ——
+# 用户在安装向导把「停止应用时归还设备」打开，install_callback 收到的仍是空值，
+# 于是落回兜底 false；访问密码的开关同理，导致填好的密码被丢弃。
+# 现在向导里全部用 radio 显式选择，脚本这里按三态解析。
+usbshare_pick_tristate() {
     local raw="$1" fallback="$2"
-    case "${raw}" in
-        true | True | TRUE | 1 | yes | on) printf 'true' ;;
-        false | False | FALSE | 0 | no | off) printf 'false' ;;
+    case "$(printf '%s' "${raw}" | tr 'A-Z' 'a-z')" in
+        on | true | enable | enabled | yes | 1) printf 'true' ;;
+        off | false | disable | disabled | no | 0) printf 'false' ;;
         *) printf '%s' "${fallback}" ;;
     esac
 }
@@ -132,15 +137,17 @@ usbshare_apply_wizard() {
     local w_unbind="${unbind_on_exit:-}"
     local w_restore="${restore_shared:-}"
     local w_kick="${kick_idle_seconds:-}"
-    local w_access_enabled="${access_enabled:-}"
+    local w_access_mode="${access_mode:-}"
     local w_access_password="${access_password:-}"
     local new_port new_password new_busids new_load new_unbind new_restore new_kick
-    local new_access_password cur_access_password cur_access_enabled password_state access_state
+    local new_access_password cur_access_password password_state access_state
     local cur_port cur_password cur_busids cur_load cur_unbind cur_restore cur_kick
 
     w_port=$(usbshare_clean "${w_port}")
     w_password=$(usbshare_clean "${w_password}")
     w_kick=$(usbshare_clean "${w_kick}")
+    w_access_mode=$(usbshare_clean "${w_access_mode}")
+    w_access_password=$(usbshare_clean "${w_access_password}")
 
     # 先把当前值一次性读出来。任何一项读失败（文件存在但读不了）就中止 ——
     # 绝不能带着空值往下走，否则会把管理页密码/共享访问密码静默清空。
@@ -167,21 +174,42 @@ usbshare_apply_wizard() {
     # 写 USBIP_BUSIDS 预置一批设备，这里原样保留。
     new_busids="${cur_busids}"
 
-    new_load=$(usbshare_pick_bool "${w_load}" "${cur_load}")
-    new_unbind=$(usbshare_pick_bool "${w_unbind}" "${cur_unbind}")
-    new_restore=$(usbshare_pick_bool "${w_restore}" "${cur_restore}")
+    new_load=$(usbshare_pick_tristate "${w_load}" "${cur_load}")
+    new_unbind=$(usbshare_pick_tristate "${w_unbind}" "${cur_unbind}")
+    new_restore=$(usbshare_pick_tristate "${w_restore}" "${cur_restore}")
     new_kick=$(usbshare_pick_seconds "${w_kick}" "${cur_kick}")
 
-    # 共享访问密码。用一个显式开关决定"要不要启用"，而不是靠"留空=不变"——
-    # 否则用户没有办法把它关掉（关掉 = 把密码清空）。
-    if [ -n "${cur_access_password}" ]; then cur_access_enabled=true; else cur_access_enabled=false; fi
-    if [ "$(usbshare_pick_bool "${w_access_enabled}" "${cur_access_enabled}")" = "false" ]; then
-        new_access_password=""
-    elif [ -n "$(usbshare_clean "${w_access_password}")" ]; then
-        new_access_password=$(usbshare_clean "${w_access_password}")
-    else
-        new_access_password="${cur_access_password}"
-    fi
+    # 共享访问密码。
+    #
+    # 交互上踩过一个真实的坑：最初用「开关 access_enabled + 密码」两个字段，
+    # 用户在应用设置里填了密码但没拨开关（或 fnOS 提交的是开关的 initValue=false），
+    # 密码就被静默丢掉、访问控制根本没生效，界面上还看不出异常。
+    # 现在改成显式三态，并且「选了启用却没给密码」会直接报错中止，不再静默降级：
+    #   * access_mode=disable → 明确关闭，清空密码
+    #   * access_mode=enable  → 用新填的密码；没填就沿用当前值；两者都没有则报错
+    #   * 其余（keep / 安装向导未提供）→ 填了就启用，否则保持当前值
+    case "$(printf '%s' "${w_access_mode}" | tr 'A-Z' 'a-z')" in
+        disable | off | false)
+            new_access_password=""
+            ;;
+        enable | on | true)
+            if [ -n "${w_access_password}" ]; then
+                new_access_password="${w_access_password}"
+            elif [ -n "${cur_access_password}" ]; then
+                new_access_password="${cur_access_password}"
+            else
+                usbshare_log "ERROR: 选择了启用共享访问密码，但没有填写密码（8-64 位）。"
+                return 1
+            fi
+            ;;
+        *)
+            if [ -n "${w_access_password}" ]; then
+                new_access_password="${w_access_password}"
+            else
+                new_access_password="${cur_access_password}"
+            fi
+            ;;
+    esac
 
     if ! usbshare_write_env "${new_port}" "${new_password}" "${new_busids}" "${new_load}" "${new_unbind}" "${new_kick}" "${new_restore}" "${new_access_password}"; then
         usbshare_log "ERROR: 无法写入 ${USBSHARE_ENV_FILE}"

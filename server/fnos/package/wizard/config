@@ -48,21 +48,34 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "开启后客户端必须先输入这个密码才能连上 USB/IP 数据端口。关掉开关即清空密码、恢复成「任何客户端都能连」。"
+                "helpText": "启用后客户端连上来必须先输密码。想改密码就选「启用」并在下面填新的；想取消就选「关闭」。"
             },
             {
-                "type": "switch",
-                "field": "access_enabled",
-                "label": "启用共享访问密码",
-                "initValue": "false",
-                "helpText": "关掉会清空已设置的访问密码。"
+                "type": "radio",
+                "field": "access_mode",
+                "label": "共享访问密码",
+                "initValue": "keep",
+                "options": [
+                    {
+                        "label": "保持不变",
+                        "value": "keep"
+                    },
+                    {
+                        "label": "启用 / 修改密码（在下面填新密码）",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "关闭（清空密码，任何客户端都能连）",
+                        "value": "disable"
+                    }
+                ]
             },
             {
                 "type": "password",
                 "field": "access_password",
-                "label": "新访问密码（留空不改）",
+                "label": "新访问密码",
                 "initValue": "",
-                "helpText": "8-64 位。留空表示沿用当前密码。",
+                "helpText": "8-64 位。选「保持不变」时留空；选「启用」时留空表示沿用当前密码（当前没有密码则必须填）。",
                 "rules": [
                     {
                         "pattern": "^$|^.{8,64}$",
@@ -73,30 +86,71 @@
         ]
     },
     {
-        "stepTitle": "设备与回收",
+        "stepTitle": "设备共享与回收",
         "items": [
             {
                 "type": "tips",
-                "helpText": "要共享哪些设备在管理页里点，不需要在这里填。"
+                "helpText": "要共享哪些设备在管理页里点，不需要在这里填。下面三项都默认「保持不变」——表单里显示的是默认动作，不是当前值，所以不动它就不会改到现有设置。"
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "restore_shared",
                 "label": "重启后自动恢复上次共享的设备",
-                "initValue": "true",
-                "helpText": "关闭后每次启动都是「不共享任何设备」。"
+                "initValue": "keep",
+                "options": [
+                    {
+                        "label": "保持不变",
+                        "value": "keep"
+                    },
+                    {
+                        "label": "打开",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "关闭",
+                        "value": "disable"
+                    }
+                ]
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "load_module",
                 "label": "启动时加载宿主内核模块 usbip_host",
-                "initValue": "true"
+                "initValue": "keep",
+                "options": [
+                    {
+                        "label": "保持不变",
+                        "value": "keep"
+                    },
+                    {
+                        "label": "打开",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "关闭",
+                        "value": "disable"
+                    }
+                ]
             },
             {
-                "type": "switch",
+                "type": "radio",
                 "field": "unbind_on_exit",
                 "label": "停止应用时把 USB 设备归还给原驱动",
-                "initValue": "false"
+                "initValue": "keep",
+                "options": [
+                    {
+                        "label": "保持不变",
+                        "value": "keep"
+                    },
+                    {
+                        "label": "打开（请先断开已连接的 Windows 客户端）",
+                        "value": "enable"
+                    },
+                    {
+                        "label": "关闭",
+                        "value": "disable"
+                    }
+                ]
             },
             {
                 "type": "text",

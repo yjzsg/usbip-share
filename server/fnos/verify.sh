@@ -80,6 +80,22 @@ for name in ("install", "config", "uninstall"):
                     f"布尔开关请写 \"true\"/\"false\""
                 )
                 sys.exit(1)
+            # 真机实测：switch 的"打开"状态传不到脚本（用户在安装向导打开
+            # 「停止应用时归还设备」，install_callback 收到的仍是空值）。全部改用 radio。
+            if item.get("type") == "switch":
+                print(
+                    f"  [FAIL] wizard/{name} 字段 {field!r} 用了 switch —— 真机实测 switch 的打开状态"
+                    f"不会传到脚本里，请改用 radio（keep / enable / disable）"
+                )
+                sys.exit(1)
+            # wizard/config 的表单显示的是 initValue，不是当前生效值（真机实测）。
+            # 所以默认动作必须是「不变」，否则用户只是打开设置再保存，就会把现有设置覆盖掉。
+            if name == "config" and "initValue" in item and item["initValue"] not in ("", "keep"):
+                print(
+                    f"  [FAIL] wizard/config 字段 {field!r} 的 initValue={item['initValue']!r} 不是「保持不变」语义。"
+                    f"表单显示的是 initValue 而不是当前值，用户一保存就会覆盖掉现有设置"
+                )
+                sys.exit(1)
             if field:
                 names.append(field)
                 fields.add(field)
