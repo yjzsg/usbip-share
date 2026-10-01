@@ -1,0 +1,11 @@
+#!/bin/bash
+# 升级前：备份现有配置，便于回滚。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+if [ -f "${USBSHARE_ENV_FILE}" ]; then
+    cp -f "${USBSHARE_ENV_FILE}" "${USBSHARE_ENV_FILE}.bak" 2>/dev/null || true
+    usbshare_log "upgrade: backed up ${USBSHARE_ENV_FILE}"
+fi
+exit 0

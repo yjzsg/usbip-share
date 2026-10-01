@@ -1,0 +1,14 @@
+{
+    ".url": {
+        "usbip-share.main": {
+            "title": "USB-SHARE",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "",
+            "gatewayPrefix": "/app/usbip-share",
+            "gatewaySocket": "app.sock",
+            "url": "/app/usbip-share/",
+            "allUsers": false
+        }
+    }
+}

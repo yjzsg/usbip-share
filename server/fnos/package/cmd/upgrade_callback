@@ -1,0 +1,11 @@
+#!/bin/bash
+# 升级后：按当前向导值重写配置。
+# 升级时若 fnOS 没有重新提供向导值，各字段为空 → 沿用升级前已备份/仍在原地的旧值，
+# 所以这一步是幂等的，不会把用户配置重置成默认值。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+usbshare_apply_wizard || exit 1
+usbshare_restart_container || true
+exit 0

@@ -1,0 +1,47 @@
+# USB-SHARE 服务端（飞牛 fnOS 版）
+#
+# 为什么这里看不到端口号：
+#   端口由「应用设置」决定，落在 <appconf>/usbip-share.env，容器启动时由
+#   entrypoint-fnos.sh 读取。因此本文件是静态的，不需要依赖 fnOS 对 compose
+#   做变量替换，也就不会出现"改了端口但 compose 没跟着变"的错位。
+#
+# 为什么用宿主网络：
+#   USB/IP 需要一个稳定、可预期的宿主端口，而且宿主的 USB/IP 客户端会按这个
+#   端口直连。走 host 网络可以少一层端口映射，也避免与向导端口的二次同步。
+#   （飞牛上已有的 Home Assistant 应用也是 privileged + network_mode: host。）
+#
+# 为什么需要 privileged：
+#   usbip-host 是宿主内核驱动。容器要能 modprobe 它，并直接读写
+#   /sys/bus/usb/drivers/usbip-host 来 bind/unbind 设备，所以需要
+#   /dev/bus/usb、/lib/modules 与特权模式。这与本项目原本的 docker compose
+#   部署完全一致，没有额外放宽权限。
+
+# 项目名必须与飞牛应用中心用的一致（= appname 小写），否则应用中心的
+# `docker compose start` 找不到容器，报
+#   exit status 1: service "server" has no container to start
+# 参考：Home-Assistant 应用的 compose 项目名就是 `home-assistant`。
+name: usbip-share
+
+services:
+  server:
+    container_name: usbip-share-server
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: usbip-share/fnos-server:1.3.0
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /lib/modules:/lib/modules:ro
+      # 应用设置写在这里（usbip-share.env），容器启动时读取。
+      - ${TRIM_PKGETC}:/etc/usbip-share
+      # 设备名称/备注、管理页密码散列、等待名单等用户数据；卸载时保留。
+      - ${TRIM_PKGVAR}:/data
+      # 飞牛统一网关要求 app.sock 落在应用自己的 target 目录里，所以把整个
+      # target 目录也挂进来，由 fnos-unix-proxy.py 在里面创建 socket。
+      - ${TRIM_APPDEST}:/appdest
+    environment:
+      TZ: Asia/Shanghai

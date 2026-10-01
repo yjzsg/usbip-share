@@ -1,0 +1,8 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "usbip-share",
+    "groupname": "usbip-share",
+    "join-groups": ["docker"]
+}

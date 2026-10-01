@@ -1,0 +1,15 @@
+#!/bin/bash
+# 应用设置保存后：重写配置文件，并重启容器让新配置生效。
+#
+# 注意：cmd/config_* 拿不到 TRIM_TEMP_LOGFILE，所以失败信息只能写
+# <appdata>/config.log（见 lib-config.sh 的 usbshare_log）。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+if ! usbshare_apply_wizard; then
+    exit 1
+fi
+
+usbshare_restart_container || true
+exit 0

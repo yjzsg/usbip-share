@@ -1,0 +1,6 @@
+#!/bin/bash
+# 配置变更前。这里不做校验：字段合法性由 wizard/config 的 rules 和
+# config_callback 里的二次校验共同保证。
+
+set -u
+exit 0

@@ -1,0 +1,10 @@
+#!/bin/bash
+# 卸载前：先停掉容器，避免卸载过程中 USB/IP 会话被硬切断。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+if command -v docker >/dev/null 2>&1; then
+    docker stop "$(usbshare_container_name)" >/dev/null 2>&1 || true
+fi
+exit 0

@@ -1,0 +1,27 @@
+[
+    {
+        "stepTitle": "卸载 USB-SHARE",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "卸载会停止并删除容器与镜像。设备名称/备注、管理页密码等数据保存在应用数据目录（<code>@appdata/usbip-share</code>），默认<b>保留</b>，方便以后重装。"
+            },
+            {
+                "type": "radio",
+                "field": "wizard_delete_data",
+                "label": "是否一并删除应用数据",
+                "initValue": "false",
+                "options": [
+                    {
+                        "label": "保留数据（推荐，重装后设备名称与密码还在）",
+                        "value": "false"
+                    },
+                    {
+                        "label": "删除全部数据（设备名称/备注、管理页密码都会丢失，不可恢复）",
+                        "value": "true"
+                    }
+                ]
+            }
+        ]
+    }
+]

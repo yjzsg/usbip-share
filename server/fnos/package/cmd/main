@@ -1,0 +1,24 @@
+#!/bin/bash
+# USB-SHARE（Docker 型飞牛应用）
+#
+# 容器的生命周期由飞牛应用中心按 config/resource 里的 docker-project 管理，
+# 所以 start/stop 不在这里重复做事——重复启动会和应用中心抢同一个 compose 项目。
+# status 必须真实反映容器状态，否则应用中心会一直把应用显示成"已停止"。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+case "$1" in
+    start | stop)
+        exit 0
+        ;;
+    status)
+        if usbshare_container_running; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    *)
+        exit 1
+        ;;
+esac

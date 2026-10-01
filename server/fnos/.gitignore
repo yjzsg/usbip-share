@@ -1,0 +1,3 @@
+# fnpack 的构建产物；要发布的话跑 build.sh 重新生成，
+# 或者从仓库外的 release/ 目录取现成的 .fpk。
+dist/

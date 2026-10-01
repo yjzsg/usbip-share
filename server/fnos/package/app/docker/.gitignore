@@ -1,0 +1,8 @@
+# 这些文件由 ../build.sh 从 server/ 同步进来，仓库里不重复保存。
+# 直接跑 fnpack build 之前请先跑 build.sh，否则包里会缺文件。
+entrypoint.sh
+healthcheck.sh
+web.py
+gateway.py
+index.html
+favicon.ico

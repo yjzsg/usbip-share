@@ -1,0 +1,18 @@
+#!/bin/bash
+# 安装应用文件后：把安装向导里的值落成容器启动时读取的配置文件。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+if ! usbshare_apply_wizard; then
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        {
+            echo "无法写入应用配置文件：${USBSHARE_ENV_FILE}"
+            echo "请确认应用安装所在存储空间可写，然后重试安装。"
+        } >"${TRIM_TEMP_LOGFILE}"
+    fi
+    exit 1
+fi
+
+mkdir -p "${USBSHARE_VARDIR}" 2>/dev/null || true
+exit 0

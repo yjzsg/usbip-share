@@ -1,0 +1,14 @@
+#!/bin/bash
+# 卸载清理后：按卸载向导里的选择决定是否删除应用数据。
+#
+# @appdata（TRIM_PKGVAR）保存的是设备名称/备注、管理页密码散列、等待名单等用户数据，
+# 系统默认不会删除，所以由这里的 wizard_delete_data 决定。
+
+set -u
+. "$(dirname "$0")/lib-config.sh"
+
+if [ "${wizard_delete_data:-false}" = "true" ]; then
+    usbshare_log "uninstall: removing application data in ${USBSHARE_VARDIR}"
+    rm -rf "${USBSHARE_VARDIR}" 2>/dev/null || true
+fi
+exit 0
