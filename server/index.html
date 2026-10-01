@@ -68,7 +68,6 @@
     .logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #24304f, #16203a); font-size: 10px; font-weight: 700; letter-spacing: .2px; box-shadow: 0 6px 14px rgba(22, 32, 58, .3); }
     .logo img { width: 30px; height: 30px; display: block; border-radius: 7px; }
     h1 { margin: 0; font-size: 24px; letter-spacing: .2px; }
-    .subtitle { margin: 3px 0 0; color: var(--muted); }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
     .toolbar { padding: 15px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
     .toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -123,10 +122,7 @@
     .empty, .error { padding: 48px 18px; text-align: center; color: var(--muted); }
     .error { color: var(--red); }
     .bottom { margin-top: 16px; color: var(--muted); font-size: 12px; }
-    .bottom p { margin: 0 0 6px; }
-    .bottom .more { margin-top: 4px; }
-    .bottom .more summary { cursor: pointer; color: var(--brand-dark); }
-    .bottom .more p { margin: 6px 0 0; }
+    .bottom p { margin: 0; }
     .access-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
     .access-row:last-child { border-bottom: 0; }
     .access-row small { display: block; color: var(--muted); font-size: 12px; }
@@ -155,11 +151,12 @@
     .search-field { flex: 1 1 320px; max-width: 460px; }
     .filter-field { flex: 0 0 150px; }
     .filters label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
-    .filters input, .filters select { width: 100%; min-height: 39px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); color: var(--text); font: inherit; }
-    /* 复选框不是输入框：上面那条 width:100% / min-height 会把它撑成一个大方块。 */
-    .filters input[type="checkbox"] { width: auto; min-height: 0; height: 16px; padding: 0; margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--brand); }
-    .hidden-toggle { display: inline-flex; align-items: center; font-size: 13px; cursor: pointer; min-height: 39px; }
-    .auto-refresh { margin-left: auto; padding-bottom: 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .filters input, .filters select { width: 100%; min-height: 39px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; background: var(--card); color: var(--text); font: inherit; }
+    /* 筛选开关做成按钮而不是复选框：按下态直接填充品牌色，一眼能看出开没开。 */
+    .chip { min-height: 39px; padding: 8px 14px; background: var(--gray-bg); color: var(--muted); border: 1px solid transparent; }
+    .chip:hover { background: var(--brand-bg); color: var(--brand-dark); }
+    .chip[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+    .chip[aria-pressed="true"]:hover { background: var(--brand-dark); color: #fff; }
     .error-banner { margin-bottom: 18px; padding: 12px 16px; display: flex; gap: 16px; align-items: center; justify-content: space-between; color: var(--red); border-color: #f4c4be; }
     .feedback { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px); padding: 12px 20px; border-radius: 10px; color: #fff; background: #1f2937; box-shadow: var(--shadow); }
     @media (prefers-reduced-motion: reduce) { button { transition: none; } button:hover { transform: none; } }
@@ -171,7 +168,7 @@
       .overview { gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .metric { padding: 18px 18px; }
     }
-    @media (max-width: 900px) { .filters { flex-wrap: wrap; } .auto-refresh { width: 100%; margin-left: 0; padding-bottom: 0; } }
+    @media (max-width: 900px) { .filters { flex-wrap: wrap; } }
     @media (max-width: 650px) {
       .overview { gap: 9px; }
       .metric { padding: 15px 12px; }
@@ -193,8 +190,7 @@
       <div class="brand">
         <div class="logo" aria-hidden="true"><img src="favicon.ico" alt=""></div>
         <div>
-          <h1>USB-SHARE 设备共享</h1>
-          <p class="subtitle">USB-SHARE 服务端管理</p>
+          <h1>USB-SHARE</h1>
         </div>
       </div>
       <div>
@@ -207,9 +203,9 @@
     </header>
 
     <section class="overview" aria-label="设备概览">
-      <div class="card metric"><span>设备总数</span><strong id="totalCount">—</strong><small>本机检测到的 USB 设备</small></div>
-      <div class="card metric"><span>正在共享</span><strong id="sharedCount">—</strong><small>已开放远程连接</small></div>
-      <div class="card metric"><span>已登记连接</span><strong id="connectedCount">—</strong><small>有客户端在线登记的设备</small></div>
+      <div class="card metric"><span>设备总数</span><strong id="totalCount">—</strong></div>
+      <div class="card metric"><span>正在共享</span><strong id="sharedCount">—</strong></div>
+      <div class="card metric"><span>已登记连接</span><strong id="connectedCount">—</strong></div>
       <div class="card metric metric-access">
         <span>访问控制</span>
         <strong class="metric-value" id="accessState">正在读取…</strong>
@@ -245,12 +241,9 @@
             <option value="connected">已登记连接</option>
           </select>
         </div>
-        <div class="filter-field">
-          <label for="showHidden">已隐藏的设备</label>
-          <label class="hidden-toggle"><input id="showHidden" type="checkbox"> 显示出来</label>
-        </div>
+        <button class="chip" id="showHidden" type="button" aria-pressed="false"
+                title="把已隐藏的设备也列出来">已隐藏设备</button>
         <button id="clearFilters" class="secondary" hidden>清除筛选</button>
-        <span class="auto-refresh">每 10 秒自动更新 · 编辑时暂停</span>
       </div>
       <div id="content" class="table-wrap" tabindex="0" aria-label="USB 设备列表">
         <div class="empty">正在读取 USB 设备…</div>
@@ -258,13 +251,7 @@
     </section>
 
     <div class="bottom">
-      <p>连接方来自 Windows 客户端的在线登记；停止心跳超过 <strong id="kickIdle">—</strong> 后自动释放其设备并移出列表（在「应用设置」里改，0 = 不自动释放）。</p>
-      <details class="more">
-        <summary>更多说明</summary>
-        <p>设备名称和备注保存在 NAS 配置目录。「强制断开」会从服务器踢掉当前远程客户端，设备仍保持共享；被占用的设备同样列在这里，用「排队」显示谁在等、排在第几位，客户端点击该设备即加入队列，等对方释放后自动接手。</p>
-        <p>导出网络接口的 USB 设备（USB 网卡）标为「系统网卡·不可共享」：共享它会让飞牛自己掉线，服务端会直接拒绝。「隐藏」用于把不想看到的设备从列表和 Windows 客户端里藏起来，勾选上方的「已隐藏的设备」可以取消隐藏。</p>
-        <p>启用了「共享访问密码」时，客户端必须先用它换取授权才能连上 USB/IP 数据端口；上面那一栏能看到并吊销已授权的客户端。</p>
-      </details>
+      <p>客户端停止心跳超过 <strong id="kickIdle">—</strong> 后自动释放其设备。</p>
     </div>
   </main>
 
@@ -322,7 +309,6 @@
   <div class="modal" id="accessModal" hidden>
     <section class="card editor" role="dialog" aria-modal="true" aria-labelledby="accessTitle">
       <h2 id="accessTitle">已授权的客户端</h2>
-      <p class="muted" id="accessHint">—</p>
       <div id="accessList"></div>
       <div class="editor-actions">
         <button class="secondary" id="accessRevokeAll">吊销全部</button>
@@ -394,8 +380,11 @@
     document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
     document.getElementById('changeBtn').onclick = doChange;
     document.getElementById('changePassBtn').onclick = () => showChange();
-    document.getElementById('showHidden').onchange = event => {
-      showHidden = event.target.checked;
+    // 被隐藏的设备默认不列出来；这个按钮是开关，按下时把 includeHidden=1 带上。
+    document.getElementById('showHidden').onclick = () => {
+      showHidden = !showHidden;
+      const toggle = document.getElementById('showHidden');
+      toggle.setAttribute('aria-pressed', String(showHidden));
       renderedHtml = '';
       loadDevices({force: true});
     };
@@ -677,7 +666,7 @@
       document.getElementById('count').textContent = `显示 ${visibleDevices.length} / ${devices.length} 个`;
       document.getElementById('clearFilters').hidden = !query && filter === 'all';
       if (!visibleDevices.length) {
-        const message = devices.length ? '没有匹配的设备，请调整搜索词或筛选条件。' : '没有发现 USB 设备。请确认设备已插入，并检查容器的 USB 映射。';
+        const message = devices.length ? '没有匹配的设备。' : '没有发现 USB 设备。';
         const html = `<div class="empty">${message}</div>`;
         if (renderedHtml !== html) { content.innerHTML = html; renderedHtml = html; }
         return;

@@ -24,6 +24,9 @@ function makeDom() {
       id: match[1], hidden: /\shidden(?:\s|>)/.test(match[0]),
       textContent: '', value: match[1] === 'statusFilter' ? 'all' : '',
       disabled: false, scrollLeft: 0, writes: 0, listeners,
+      attrs: new Map([...match[0].matchAll(/([a-zA-Z-]+)="([^"]*)"/g)].map(m => [m[1], m[2]])),
+      setAttribute(name, value) { this.attrs.set(name, String(value)); },
+      getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; },
       get innerHTML() { return html; },
       set innerHTML(value) { html = value; this.writes++; },
       focus() {},
@@ -251,16 +254,21 @@ async function run(options = {}) {
     alias: '', remark: '', binding: 'serial', bindingLabel: '序列号 NIC-1',
     duplicateModel: false, shared: false, hidden: true, connections: []};
   r = await run();
-  check('未勾选时不请求已隐藏设备', !r.calls.some(call => call.url.includes('includeHidden')));
+  check('未按下时不请求已隐藏设备', !r.calls.some(call => call.url.includes('includeHidden')));
   check('普通设备给出隐藏按钮', r.el('content').innerHTML.includes('data-action="hide"'));
   r = await run({devices: [hiddenDevice]});
   const hiddenHtml = r.el('content').innerHTML;
   check('已隐藏设备标出徽标并整行淡显', hiddenHtml.includes('已隐藏') && hiddenHtml.includes('row-hidden'));
   check('已隐藏设备给出取消隐藏按钮', hiddenHtml.includes('data-action="unhide"'));
   r = await run({mutationHandler: () => response({ok: true, usbipPort: 5555, devices: [hiddenDevice]})});
-  r.el('showHidden').onchange({target: {checked: true}});
+  check('「已隐藏设备」是开关按钮而不是复选框', r.el('showHidden').getAttribute('aria-pressed') === 'false');
+  r.el('showHidden').onclick();
   await settle();
-  check('勾选后请求带 includeHidden=1', r.calls.some(call => call.url === '/api/devices?includeHidden=1'));
+  check('按下后请求带 includeHidden=1', r.calls.some(call => call.url === '/api/devices?includeHidden=1'));
+  check('按下后按钮被标记为按下态', r.el('showHidden').getAttribute('aria-pressed') === 'true');
+  r.el('showHidden').onclick();
+  await settle();
+  check('再按一次恢复未按下并重新拉取', r.el('showHidden').getAttribute('aria-pressed') === 'false');
   r = await run();
   const callsBeforeHide = r.calls.length;
   r.sandbox.testButton = {disabled: false};
