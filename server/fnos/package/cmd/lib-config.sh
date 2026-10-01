@@ -198,7 +198,7 @@ usbshare_apply_wizard() {
             elif [ -n "${cur_access_password}" ]; then
                 new_access_password="${cur_access_password}"
             else
-                usbshare_log "ERROR: 选择了启用共享访问密码，但没有填写密码（8-64 位）。"
+                usbshare_log "ERROR: 选择了启用共享访问密码，但没有填写密码（6-64 位）。"
                 return 1
             fi
             ;;

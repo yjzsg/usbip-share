@@ -8,7 +8,7 @@ if ! usbshare_apply_wizard; then
     if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
         {
             echo "安装配置没有写入成功，请检查下面两点后重试："
-            echo "1) 如果你在向导里选了「启用共享访问密码」，必须填写 8-64 位的密码；"
+            echo "1) 如果你在向导里选了「启用共享访问密码」，必须填写 6-64 位的密码；"
             echo "2) 确认应用安装所在的存储空间可写。"
             echo ""
             echo "详细原因见：${USBSHARE_VARDIR}/config.log"
