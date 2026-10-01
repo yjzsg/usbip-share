@@ -27,10 +27,18 @@ usbshare_clean() {
     printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
-# 读取当前生效值；文件不存在或值为空时用 fallback。
+# 读取当前生效值；文件不存在或键为空时用 fallback。
+#
+# 返回码 2 = 文件存在但当前用户读不了。调用方必须中止，不能继续用空值覆盖 ——
+# 否则一次属主/权限错乱就会静默把管理页密码和共享访问密码清空（实测踩过：
+# 用 root 改过 env 文件后属主变成 root，包用户读不到，config_callback 就把两个密码都写空了）。
 usbshare_current() {
     local key="$1" fallback="$2" value=""
     if [ -f "${USBSHARE_ENV_FILE}" ]; then
+        if [ ! -r "${USBSHARE_ENV_FILE}" ]; then
+            usbshare_log "ERROR: ${USBSHARE_ENV_FILE} 存在但当前用户读不了（属主或权限不对）。拒绝用空值覆盖它，以免静默清掉管理页密码与共享访问密码。"
+            return 2
+        fi
         value=$(sed -n "s/^${key}=//p" "${USBSHARE_ENV_FILE}" | tail -n 1)
     fi
     if [ -z "${value}" ]; then
@@ -72,9 +80,16 @@ usbshare_pick_seconds() {
 usbshare_write_env() {
     local port="$1" password="$2" busids="$3" load_module="$4" unbind_on_exit="$5" kick_idle="$6"
     local restore_shared="$7" access_password="$8"
-    local tmp
+    local tmp prev_owner
 
     mkdir -p "${USBSHARE_APPCONF}" 2>/dev/null || true
+    # 记下旧文件的属主：管理员用 root 手改过 env 之后属主会变成 root，
+    # 之后包用户就再也读不到它（见 usbshare_current 的说明）。
+    prev_owner=""
+    if [ -e "${USBSHARE_ENV_FILE}" ]; then
+        prev_owner=$(stat -c '%u:%g' "${USBSHARE_ENV_FILE}" 2>/dev/null || true)
+    fi
+
     tmp=$(mktemp "${USBSHARE_APPCONF}/.usbip-share.env.XXXXXX" 2>/dev/null) || return 1
 
     umask 077
@@ -96,6 +111,9 @@ usbshare_write_env() {
     }
 
     chmod 0600 "${tmp}" 2>/dev/null || true
+    if [ -n "${prev_owner}" ] && [ "$(id -u 2>/dev/null)" = "0" ]; then
+        chown "${prev_owner}" "${tmp}" 2>/dev/null || true
+    fi
     mv -f "${tmp}" "${USBSHARE_ENV_FILE}" 2>/dev/null || {
         rm -f "${tmp}"
         return 1
@@ -118,33 +136,44 @@ usbshare_apply_wizard() {
     local w_access_password="${access_password:-}"
     local new_port new_password new_busids new_load new_unbind new_restore new_kick
     local new_access_password cur_access_password cur_access_enabled password_state access_state
+    local cur_port cur_password cur_busids cur_load cur_unbind cur_restore cur_kick
 
     w_port=$(usbshare_clean "${w_port}")
     w_password=$(usbshare_clean "${w_password}")
     w_kick=$(usbshare_clean "${w_kick}")
 
-    new_port=$(usbshare_pick_port "${w_port}" "$(usbshare_current USBIP_PORT 5555)")
+    # 先把当前值一次性读出来。任何一项读失败（文件存在但读不了）就中止 ——
+    # 绝不能带着空值往下走，否则会把管理页密码/共享访问密码静默清空。
+    cur_port=$(usbshare_current USBIP_PORT 5555) || return 1
+    cur_password=$(usbshare_current USBIP_WEB_PASSWORD '') || return 1
+    cur_busids=$(usbshare_current USBIP_BUSIDS '') || return 1
+    cur_load=$(usbshare_current USBIP_LOAD_MODULE true) || return 1
+    cur_unbind=$(usbshare_current USBIP_UNBIND_ON_EXIT false) || return 1
+    cur_restore=$(usbshare_current USBIP_RESTORE_SHARED true) || return 1
+    cur_kick=$(usbshare_current USBIP_KICK_IDLE_SECONDS 60) || return 1
+    cur_access_password=$(usbshare_current USBIP_ACCESS_PASSWORD '') || return 1
+
+    new_port=$(usbshare_pick_port "${w_port}" "${cur_port}")
 
     if [ -n "${w_password}" ]; then
         new_password="${w_password}"
     else
-        new_password=$(usbshare_current USBIP_WEB_PASSWORD '')
+        new_password="${cur_password}"
     fi
 
     # busids 不再由向导收集：设备是装完之后才插上的，向导里没法列出来，
     # 让用户手敲 busid 也不合理。默认行为改成"重启后自动恢复上次共享的设备"
     # （见 entrypoint-fnos.sh 的 USBIP_RESTORE_SHARED）。仍可在 env 文件里手工
     # 写 USBIP_BUSIDS 预置一批设备，这里原样保留。
-    new_busids=$(usbshare_current USBIP_BUSIDS '')
+    new_busids="${cur_busids}"
 
-    new_load=$(usbshare_pick_bool "${w_load}" "$(usbshare_current USBIP_LOAD_MODULE true)")
-    new_unbind=$(usbshare_pick_bool "${w_unbind}" "$(usbshare_current USBIP_UNBIND_ON_EXIT false)")
-    new_restore=$(usbshare_pick_bool "${w_restore}" "$(usbshare_current USBIP_RESTORE_SHARED true)")
-    new_kick=$(usbshare_pick_seconds "${w_kick}" "$(usbshare_current USBIP_KICK_IDLE_SECONDS 60)")
+    new_load=$(usbshare_pick_bool "${w_load}" "${cur_load}")
+    new_unbind=$(usbshare_pick_bool "${w_unbind}" "${cur_unbind}")
+    new_restore=$(usbshare_pick_bool "${w_restore}" "${cur_restore}")
+    new_kick=$(usbshare_pick_seconds "${w_kick}" "${cur_kick}")
 
     # 共享访问密码。用一个显式开关决定"要不要启用"，而不是靠"留空=不变"——
     # 否则用户没有办法把它关掉（关掉 = 把密码清空）。
-    cur_access_password=$(usbshare_current USBIP_ACCESS_PASSWORD '')
     if [ -n "${cur_access_password}" ]; then cur_access_enabled=true; else cur_access_enabled=false; fi
     if [ "$(usbshare_pick_bool "${w_access_enabled}" "${cur_access_enabled}")" = "false" ]; then
         new_access_password=""
