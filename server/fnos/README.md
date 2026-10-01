@@ -82,10 +82,20 @@ sudo appcenter-cli status usbip-share
 |---|---|
 | `port` | 对外服务端口（USB/IP + 管理页共用）。留空 = 保持当前值。桌面小窗走统一网关，不依赖这个端口。 |
 | `admin_password` | 管理页密码。留空 = 不改。密码由环境变量托管，每次启动同步进 `auth.json`。 |
+| `access_mode` | 共享访问密码：`disable`（关闭，任何客户端都能连）/ `enable`（启用或改密码）。选「启用」且密码框留空 = 沿用当前密码。 |
+| `access_password` | 共享访问密码（6-64 位）。选「启用」时留空 = 沿用当前密码；选「关闭」时必须留空，否则保存会报错（见下面踩坑记录）。 |
 | `restore_shared` | **重启后自动恢复上次共享的设备**。管理页每共享/取消一台设备都会维护 `<appdata>/managed-busids`，这个开关决定启动时要不要照它恢复。 |
 | `kick_idle_seconds` | 客户端失联多久后释放其设备，`0` = 不自动释放。留空 = 保持当前值。 |
 | `load_module` | 启动时 `modprobe usbip_host`。 |
 | `unbind_on_exit` | 停止应用时把设备归还给原驱动。 |
+
+布尔项在「应用设置」里是 radio，**表单会用已保存的值回填**（真机实测：`initValue` 是空串时表单里显示的仍是当前端口），所以 `initValue` 只表示"第一次的默认值"，不必写成「保持不变」这种占位语义。安装向导用 `enable`/`disable`、应用设置用 `true`/`false`，`usbshare_pick_tristate` 两套都认（还认 `keep`/`on`/`off`/`yes`/`no`/`1`/`0`）；取值写错会静默落回「当前值」——`verify.sh` 只放行词表里的取值。
+
+> ⚠️ 这套设计成立的前提是上面那条"表单会回填当前值"。如果哪天出现"只是打开应用设置再保存，设置就被改回默认值"，说明回填没有发生，得把「保持不变」三态加回来（`lib-config.sh` 的 `usbshare_pick_tristate` 与 `access_mode` 分支一直保留 `keep` 支持）。
+
+密码里出现空格、`$`、反引号都没问题：env 文件是**逐行解析**的（`fnos-env.sh` 的 `usbshare_load_env_file`），不经过 shell 展开。**不要**把 `<appconf>/usbip-share.env` 交给 `.`(source) 去读 —— 早期版本就是这么干的，密码里的空格会把整行拆开（容器直接以 127 退出起不来），`$`/反引号会被展开（密码被静默改掉，甚至在特权容器里执行命令）。
+
+卸载时「删除全部数据」会删掉 `<appdata>/usbip-share` **和** `<appconf>/usbip-share/usbip-share.env`：后者含**明文**的管理页密码与共享访问密码，不删就等于把密码留在 NAS 上（fnOS 卸载后不会自己清理 `@appconf` / `@appdata`，本机几个已卸载应用的目录至今还在）。
 
 保存后 `cmd/config_callback` 重写 `<appconf>/usbip-share.env` 并 `docker restart` 容器
 （配置是挂载进去的文件，不需要重建容器）。
@@ -94,7 +104,8 @@ sudo appcenter-cli status usbip-share
 
 飞牛向导的 `checkbox` / `select` 选项是**打包时静态写死在 JSON 里**的，而 USB 设备是装完之后
 才插上的，向导里没法枚举。所以默认行为改成：**在管理页点一次「开始共享」，以后重启自动恢复**。
-想预置一批设备的话，手工往 `<appconf>/usbip-share.env` 里写 `USBIP_BUSIDS=1-1,1-2.3` 即可。
+想预置一批设备的话，手工往 `<appconf>/usbip-share.env` 里写 `USBIP_BUSIDS=1-1,1-2.3` 即可
+（`USBIP_BUSIDS` 是 `usbshare_apply_wizard` 会原样保留的键，保存应用设置不会把它冲掉）。
 
 ## 关键设计决定
 
@@ -139,6 +150,11 @@ USB/IP 需要宿主上稳定、可预期的端口，走宿主网络少一层映�
 | `appcenter-cli uninstall` 被拒 | 飞牛限制：已安装应用只能从网页端卸载。 | 升级/卸载走网页端，文档已写明。 |
 | `appcenter-cli start` 报 `error code 10500` 但应用其实在跑 | 安装后应用中心会自动拉起容器，紧接着的 `start` 撞上了。 | 以 `appcenter-cli status` / 容器状态为准。 |
 | `type: iframe` + `port: ${port}` 弹窗白屏 | 端口入口在桌面 iframe 里不可用。 | 改用统一网关入口。 |
+| 密码里带空格 → 容器反复重启，日志只有一行 `123456: not found`；密码里带 `$`/反引号 → 密码被静默改掉、反引号里的命令在特权容器里被执行 | env 文件是用 `.`(source) + `set -a` 读的，shell 把值当代码解析：`USBIP_WEB_PASSWORD=abc 123456` 里 `123456` 变成了要执行的命令（赋值也不再生效），`pa$$word` 被展开成 `pa<PID>word` | `fnos-env.sh` 改成逐行解析（`usbshare_load_env_file`），不 source / 不 eval；`verify.sh` 里加了防回归检查 |
+| 安装向导里填了共享访问密码，但没把默认的「不启用」改成「启用」→ 密码被静默丢掉，访问控制根本没生效，界面看不出异常 | `access_mode` 的 radio 默认值是 `disable`，而脚本把 `disable` 当成"明确关闭并清空密码"。1.3.1 的变更说明声称已修，其实只修了「应用设置」那一侧 | 矛盾输入（选了关闭却填了密码）改成报错中止，不再静默丢值 |
+| 卸载时勾了「删除全部数据」，明文的管理页/共享访问密码仍留在 NAS 上 | `uninstall_callback` 只删了 `@appdata`，`@appconf/usbip-share.env`（明文密码）没动；fnOS 卸载后不会清理 `@appconf`/`@appdata`（本机已卸载的 cloud-idphoto / StirlingPDF / xiaomusic / Lucky / Cloudflare-QT 目录至今还在） | 一并删除 env 文件与 `.bak`，空了就删目录 |
+| 应用端口设成 32768-60999 里的值（例如 45000）→ 容器永久重启循环，重试也不自愈 | 内部端口用 `bind(0)` 现挑，内核只会从临时端口范围里取；挑端口时对外端口还没被监听，可能正好被挑中，随后网关 `EADDRINUSE`，而 `/data/internal-ports.env` 里存的还是那个值 | 挑内部端口时显式排除 `USBIP_PORT` |
+| 用 Windows 编辑器手工改 env 文件后，`USBIP_LOAD_MODULE=true` 之类的值不生效 | CRLF：值末尾带了 `\r`，`[ "$X" = "true" ]` 判不等 | 解析器剥掉行尾 CR，`usbshare_current` 同样处理 |
 
 ## 安全护栏（USB 网卡 / 隐藏设备）
 
@@ -169,7 +185,9 @@ USB/IP 需要宿主上稳定、可预期的端口，走宿主网络少一层映�
 
 **逃生阀**：`USBIP_ALLOW_NETDEV=true` 会关掉 1/2/3 三道判据（危险，默认关）。飞牛应用里它没有暴露在
 「应用设置」中；真要开，手工往 `<appconf>/usbip-share.env` 里加一行 `USBIP_ALLOW_NETDEV=true`
-（`fnos-env.sh` 用 `set -a` 把该文件的每个变量都导出，所以这样是生效的），然后重启应用。
+（`fnos-env.sh` 会把该文件里每个变量名合法的键都导出，所以这样是生效的），然后重启应用。
+**注意**：`usbshare_write_env` 每次都按固定的键集合重写这个文件，所以**任何一次「应用设置」保存都会
+冲掉这类手工加的键**（只有 `USBIP_BUSIDS` 例外，它会被原样带过去）。改完设置记得回头再补上。
 
 ### 隐藏设备
 
@@ -189,6 +207,9 @@ USB/IP 需要宿主上稳定、可预期的端口，走宿主网络少一层映�
   暴露原始 USB/IP 协议。它和 5555 上的网关是同一个协议、同样的能力，不额外放宽权限；
   但如果要对外做端口白名单，只放行应用设置里的那个端口即可。
 - **管理页是明文 HTTP**，和 USB/IP 一样只在可信局域网内使用，不要把端口暴露到公网。
+- **`<appconf>/usbip-share.env` 里是明文密码**（管理页密码、共享访问密码），文件权限 0600、属主是包用户；
+  `@appdata/auth.json` 里存的只是散列。备份/迁移/把存储空间交给别人之前留意这个文件
+  （卸载时勾「删除全部数据」会一并删掉它）。
 - **容器是 `privileged: true`**：usbip-host 是宿主内核驱动，容器要 `modprobe` 并直接 bind/unbind
   设备。与本项目原本的 docker compose 部署一致。上架飞牛应用中心前需先向飞牛确认这一条是否允许。
 - **应用设置里改端口会短暂中断正在使用的 USB/IP 会话**（容器重启）。
@@ -214,6 +235,13 @@ USB/IP 需要宿主上稳定、可预期的端口，走宿主网络少一层映�
 - [x] `share 2-7` 返回 409 且未执行 bind；`/api/devices` 里 `2-7` 的 `networkInterfaces`
       为 `['enxc84d44294124']`，其余设备为空数组
 - [x] `/api/devices` 返回生效中的 `kickIdleSeconds`，页面按它渲染失联释放时长
+- [x] 密码链：用带空格的密码 `pa ss word 123` / `cli ent pw` 走一遍 `lib-config.sh → env 文件 →
+      容器`，容器 `healthy`，`/api/login` 200、`/api/access/authorize` 200（对照：旧版 source 读法
+      在同一个文件上会 `ss: not found` 直接退出）
+- [x] 安装向导里「选了不启用却填了密码」→ `install_callback` 返回 1 并给出提示，不再静默丢密码
+- [x] 配置文件丢失但 `/data/config.log` 存在 → 容器拒绝启动（exit 1）并打印原因；从未配置过的
+      实例仍按原样带兜底值启动（只有 WARNING）
+- [x] 卸载 `wizard_delete_data=true` → `@appdata` 与 `@appconf/usbip-share.env` 都被删除
 - [x] 飞牛桌面小窗实际打开效果（用户已确认可用）
 - [ ] Windows 客户端连新端口做一次真实 attach
 - [ ] 默认路由回滚（防线 3 的兜底）只做了单元测试，**未做真机断电式验证** —— 触发它需要真的

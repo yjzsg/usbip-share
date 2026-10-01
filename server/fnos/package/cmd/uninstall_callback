@@ -1,14 +1,33 @@
 #!/bin/bash
 # 卸载清理后：按卸载向导里的选择决定是否删除应用数据。
 #
-# @appdata（TRIM_PKGVAR）保存的是设备名称/备注、管理页密码散列、等待名单等用户数据，
-# 系统默认不会删除，所以由这里的 wizard_delete_data 决定。
+# 两份数据都要管（实测：fnOS 卸载后 @appconf / @appdata 都留在盘上 —— 本机
+# 已卸载的 cloud-idphoto / StirlingPDF / xiaomusic / Lucky / Cloudflare-QT
+# 目录至今还在）：
+#   * @appdata（TRIM_PKGVAR）：设备名称/备注、auth.json 里的密码散列、等待名单；
+#   * @appconf（TRIM_PKGETC）/usbip-share.env：**明文**的管理页密码与共享访问密码。
+# 只删前者的话，用户勾了「删除全部数据」，明文密码仍然留在 NAS 上，与向导里
+# “管理页密码都会丢失”的说法不符。
 
 set -u
 . "$(dirname "$0")/lib-config.sh"
 
-if [ "${wizard_delete_data:-false}" = "true" ]; then
-    usbshare_log "uninstall: removing application data in ${USBSHARE_VARDIR}"
-    rm -rf "${USBSHARE_VARDIR}" 2>/dev/null || true
-fi
+case "$(printf '%s' "${wizard_delete_data:-false}" | tr 'A-Z' 'a-z')" in
+    true | 1 | yes | on)
+        # usbshare_log 写的就是下面要删掉的目录，日志会跟着消失，所以同时打到
+        # stdout（飞牛会把回调的 stdout 收进安装日志），留个可查的痕迹。
+        usbshare_log "uninstall: removing application data in ${USBSHARE_VARDIR} and ${USBSHARE_ENV_FILE}"
+        printf '%s\n' "[usbip-share] 按卸载向导的选择删除应用数据：${USBSHARE_VARDIR} 与 ${USBSHARE_ENV_FILE}（后者含明文密码）"
+        rm -rf "${USBSHARE_VARDIR}" 2>/dev/null || true
+        # env 文件里是明文的管理页密码与共享访问密码，必须一起删；
+        # .bak 是升级时留下的同一份备份，同样含明文。
+        rm -f "${USBSHARE_ENV_FILE}" "${USBSHARE_ENV_FILE}.bak" 2>/dev/null || true
+        # 目录只在自己空了的时候删，避免动到 fnOS 可能放在这里的别的东西。
+        rmdir "${USBSHARE_APPCONF}" 2>/dev/null || true
+        ;;
+    *)
+        usbshare_log "uninstall: keeping application data in ${USBSHARE_VARDIR}"
+        ;;
+esac
+
 exit 0

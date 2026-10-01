@@ -85,15 +85,18 @@ for name in ("install", "config", "uninstall"):
             if item.get("type") == "switch":
                 print(
                     f"  [FAIL] wizard/{name} 字段 {field!r} 用了 switch —— 真机实测 switch 的打开状态"
-                    f"不会传到脚本里，请改用 radio（keep / enable / disable）"
+                    f"不会传到脚本里，请改用 radio"
                 )
                 sys.exit(1)
-            # wizard/config 的表单显示的是 initValue，不是当前生效值（真机实测）。
-            # 所以默认动作必须是「不变」，否则用户只是打开设置再保存，就会把现有设置覆盖掉。
-            if name == "config" and "initValue" in item and item["initValue"] not in ("", "keep"):
+            # 真机实测：飞牛的表单会用**已保存的值**回填 —— 例：`port` 的 initValue 是空串，
+            # 但表单里显示的是当前端口 5555。所以 initValue 只是"第一次"的默认值，
+            # 不要写成「保持不变」那种占位语义（那样用户反而看不到当前设置）。
+            # 这里只校验 initValue 是 options 里的合法取值，避免拼错导致表单没有选中项。
+            options = item.get("options")
+            if options and item.get("initValue") not in [o.get("value") for o in options]:
                 print(
-                    f"  [FAIL] wizard/config 字段 {field!r} 的 initValue={item['initValue']!r} 不是「保持不变」语义。"
-                    f"表单显示的是 initValue 而不是当前值，用户一保存就会覆盖掉现有设置"
+                    f"  [FAIL] wizard/{name} 字段 {field!r} 的 initValue={item.get('initValue')!r} "
+                    f"不在 options 里 {[o.get('value') for o in options]}"
                 )
                 sys.exit(1)
             if field:
@@ -111,6 +114,259 @@ PY
     [ $? -ne 0 ] && FAILED=$((FAILED + 1))
 else
     warn "没有 python3，跳过 JSON 校验"
+fi
+
+section "配置链一致性（词表 / 默认值 / 键集合 / 网关前缀）"
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "${PKG_DIR}" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+pkg = pathlib.Path(sys.argv[1])
+failed = []
+
+
+def ok(msg):
+    print(f"  [ok]   {msg}")
+
+
+def bad(msg):
+    failed.append(msg)
+    print(f"  [FAIL] {msg}")
+
+
+def warn(msg):
+    print(f"  [warn] {msg}")
+
+
+def load_json(rel):
+    return json.loads((pkg / rel).read_text(encoding="utf-8"))
+
+
+def wizard_fields(name):
+    out = {}
+    for step in load_json(f"wizard/{name}"):
+        for item in step.get("items", []):
+            if item.get("field"):
+                out[item["field"]] = item
+    return out
+
+
+install = wizard_fields("install")
+config = wizard_fields("config")
+uninstall = wizard_fields("uninstall")
+
+lib = (pkg / "cmd" / "lib-config.sh").read_text(encoding="utf-8")
+uninstall_cb = (pkg / "cmd" / "uninstall_callback").read_text(encoding="utf-8")
+envsh = (pkg / "app" / "docker" / "fnos-env.sh").read_text(encoding="utf-8")
+ep = (pkg / "app" / "docker" / "entrypoint-fnos.sh").read_text(encoding="utf-8")
+compose = (pkg / "app" / "docker" / "docker-compose.yaml").read_text(encoding="utf-8")
+
+# --- 1. 向导字段必须真的被当成环境变量读取 -------------------------------
+# 只检查"字段名在 lib-config.sh 里出现过"是不够的：注释、函数名
+# （比如 access_mode 撞上 usbshare_pick_... 之类）都能让它蒙混过关。
+for name, fields, src, where in (
+    ("install", install, lib, "cmd/lib-config.sh"),
+    ("config", config, lib, "cmd/lib-config.sh"),
+    ("uninstall", uninstall, uninstall_cb, "cmd/uninstall_callback"),
+):
+    for field in sorted(fields):
+        if re.search(r"\$\{" + re.escape(field) + r"[:}]", src):
+            ok(f"{name}: 字段 {field} 以 ${{{field}}} 的形式被 {where} 读取")
+        else:
+            bad(
+                f"{name}: 字段 {field} 没有以 ${{{field}}} 的形式出现在 {where} 里"
+                f"（名字出现在注释里不算）—— 用户在向导里填了它也不会有任何效果"
+            )
+
+# --- 2. 安装向导与应用设置的字段集合 ------------------------------------
+only_install = sorted(set(install) - set(config))
+only_config = sorted(set(config) - set(install))
+if only_install:
+    bad(f"这些字段只在安装向导里有、应用设置里没有，装好后用户再也改不了：{only_install}")
+elif only_config:
+    warn(f"这些字段只在应用设置里有（安装时无法设置）：{only_config}")
+else:
+    ok("wizard/install 与 wizard/config 的字段集合一致")
+
+# --- 3. radio 取值词表 + initValue 必须是合法选项 -----------------------
+# lib-config.sh 的 usbshare_pick_tristate / access_mode 分支只认这些值；
+# 选项值写错（比如 "enabled"/"disbale"）会静默落回"当前值"，界面上看不出异常。
+TRISTATE = {"keep", "enable", "disable", "on", "off", "true", "false", "yes", "no", "1", "0"}
+for name, fields in (("install", install), ("config", config), ("uninstall", uninstall)):
+    for field, item in sorted(fields.items()):
+        if item.get("type") not in ("radio", "select"):
+            continue
+        values = [str(o.get("value")) for o in item.get("options", [])]
+        unknown = [v for v in values if v.lower() not in TRISTATE]
+        if unknown:
+            bad(f"{name}: 字段 {field} 的选项取值 {unknown} 不在脚本认得的词表里 {sorted(TRISTATE)}")
+        else:
+            ok(f"{name}: 字段 {field} 的选项取值都在词表里 {values}")
+        init = item.get("initValue")
+        if init is not None and str(init) not in values:
+            bad(f"{name}: 字段 {field} 的 initValue={init!r} 不是它的任何一个选项 {values}")
+
+# --- 3b. 同一个字段在两个向导里的取值词表 ------------------------------
+# 脚本两套写法都认，但同一个设置在「安装」和「应用设置」里写法不同，改的时候
+# 很容易只改一处；这里只提醒，不拦。
+for field in sorted(set(install) & set(config)):
+    left, right = install[field], config[field]
+    if left.get("type") != right.get("type"):
+        warn(f"字段 {field} 在 install 里是 {left.get('type')}、在 config 里是 {right.get('type')}")
+        continue
+    if left.get("type") not in ("radio", "select"):
+        continue
+    left_values = [str(o.get("value")) for o in left.get("options", [])]
+    right_values = [str(o.get("value")) for o in right.get("options", [])]
+    if left_values == right_values:
+        ok(f"字段 {field} 在两个向导里的选项取值一致 {left_values}")
+    else:
+        warn(
+            f"字段 {field} 的选项取值两处写法不同：install={left_values} config={right_values}"
+            f"（usbshare_pick_tristate 两套都认，但改的时候容易只改一处）"
+        )
+
+# --- 4. 默认值一致性：lib-config.sh 的兜底 ↔ 安装向导的 initValue --------
+# 两边不一致时，安装时用户看到的默认值和"读不到配置时脚本用的默认值"会打架。
+KEY_FIELD = {
+    "USBIP_PORT": "port",
+    "USBIP_WEB_PASSWORD": "admin_password",
+    "USBIP_BUSIDS": None,  # 向导不再收集，由管理页维护
+    "USBIP_LOAD_MODULE": "load_module",
+    "USBIP_UNBIND_ON_EXIT": "unbind_on_exit",
+    "USBIP_RESTORE_SHARED": "restore_shared",
+    "USBIP_KICK_IDLE_SECONDS": "kick_idle_seconds",
+    "USBIP_ACCESS_PASSWORD": "access_password",
+}
+
+
+def norm(value):
+    value = (value or "").strip().strip("'\"")
+    return {
+        "true": "enable", "on": "enable", "1": "enable",
+        "false": "disable", "off": "disable", "0": "disable",
+    }.get(value.lower(), value)
+
+
+fallbacks = {}
+for match in re.finditer(r"usbshare_current\s+(USBIP_[A-Z_]+)\s+(\S*)", lib):
+    fallbacks[match.group(1)] = match.group(2).rstrip(")").strip("'\"")
+
+for key, field in sorted(KEY_FIELD.items()):
+    if key not in fallbacks:
+        bad(f"cmd/lib-config.sh 没有用 usbshare_current 读取 {key}（保存设置时会静默落回兜底值）")
+        continue
+    if field is None or field not in install or "initValue" not in install[field]:
+        continue
+    if norm(fallbacks[key]) != norm(install[field]["initValue"]):
+        bad(
+            f"默认值不一致：lib-config.sh 里 {key} 的兜底是 {fallbacks[key]!r}，"
+            f"安装向导 {field} 的 initValue 是 {install[field]['initValue']!r}"
+        )
+    else:
+        ok(f"默认值一致：{key} 兜底={fallbacks[key]!r} ↔ install/{field}={install[field]['initValue']!r}")
+
+# --- 5. env 文件读写的键集合必须一致 ------------------------------------
+written = set(re.findall(r"printf '(USBIP_[A-Z_]+)=%s", lib))
+read_keys = set(fallbacks)
+if written == read_keys:
+    ok(f"env 文件读写的键集合一致：{sorted(written)}")
+else:
+    bad(
+        f"env 文件读写的键对不上：只写不读={sorted(written - read_keys)}，"
+        f"只读不写={sorted(read_keys - written)}"
+        f"（只写不读的键，用户下一次保存设置就会被丢掉）"
+    )
+
+# --- 6. 写进 env 的键必须真的有人用 -------------------------------------
+docker_text = "\n".join(
+    p.read_text(encoding="utf-8", errors="replace")
+    for p in sorted((pkg / "app" / "docker").iterdir())
+    if p.is_file() and p.name not in ("Dockerfile", "docker-compose.yaml")
+)
+dead = sorted(k for k in written if k not in docker_text)
+if dead:
+    warn(f"这些键写进了 env 文件，但容器侧没有任何脚本/代码引用它们：{dead}")
+else:
+    ok("写进 env 文件的每个键在容器侧都有消费者")
+
+# --- 7. 容器侧读配置文件的方式（防回归）--------------------------------
+# 曾经用 `.`(source) + set -a 读：密码里有空格/$/反引号时会被 shell 拆分或
+# 展开（实测容器以 127 退出起不来，或访问密码变成空值 = 访问控制静默失效）。
+if "set -a" in envsh or re.search(r"^\s*\.\s+\"?\$\{?(USBSHARE_CONF|USBSHARE_PORTS_FILE)", envsh, re.M):
+    bad(
+        "app/docker/fnos-env.sh 又用 source/set -a 读配置文件了：密码里的空格/$/反引号"
+        "会被 shell 拆分或展开，容器可能起不来，或者共享访问密码变成空值（访问控制静默失效）"
+    )
+elif "usbshare_load_env_file" not in envsh:
+    bad("app/docker/fnos-env.sh 没有用 usbshare_load_env_file 逐行解析配置文件")
+else:
+    ok("fnos-env.sh 用逐行解析（不 source、不 eval）读配置文件")
+
+# --- 8. 内部端口必须避开对外端口 ----------------------------------------
+# 对外端口在挑内部端口时还没被监听，会被"挑空闲端口"挑中；随后网关
+# EADDRINUSE 起不来，容器退出，重启后 /data/internal-ports.env 里还是那个值，
+# 于是变成永远起不来的重启循环。
+if re.search(r'!=\s*"\$\{USBIP_PORT\}"', ep):
+    ok("entrypoint-fnos.sh 挑内部端口时排除了对外端口 USBIP_PORT")
+else:
+    bad(
+        "entrypoint-fnos.sh 挑内部端口时没有排除对外端口 USBIP_PORT："
+        "应用端口落在内核临时端口范围（本机 32768-60999）里时可能撞上，容器会永久重启循环"
+    )
+
+# --- 9. 统一网关：前缀 / socket / 挂载 ----------------------------------
+manifest = {}
+for line in (pkg / "manifest").read_text(encoding="utf-8").splitlines():
+    if line.lstrip().startswith("#") or "=" not in line:
+        continue
+    key, _, value = line.partition("=")
+    manifest[key.strip()] = value.strip()
+uidir = manifest.get("desktop_uidir", "ui")
+appname = manifest.get("appname", "")
+launch = manifest.get("desktop_applaunchname", "")
+ui = load_json(f"app/{uidir}/config")
+entry = ui.get(".url", {}).get(launch, {})
+
+prefix = entry.get("gatewayPrefix", "")
+match = re.search(r'USBSHARE_GATEWAY_PREFIX="\$\{USBSHARE_GATEWAY_PREFIX:-([^}"]+)\}"', ep)
+ep_prefix = match.group(1) if match else ""
+if prefix and ep_prefix == prefix:
+    ok(f"gatewayPrefix 一致：app/{uidir}/config={prefix} ↔ entrypoint-fnos.sh={ep_prefix}")
+else:
+    bad(
+        f"gatewayPrefix 不一致：app/{uidir}/config={prefix!r}，"
+        f"entrypoint-fnos.sh 的默认值={ep_prefix!r}（桌面小窗会 404）"
+    )
+
+match = re.search(r'USBSHARE_GATEWAY_SOCKET="\$\{USBSHARE_GATEWAY_SOCKET:-([^}"]+)\}"', ep)
+if match:
+    sock_dir = str(pathlib.PurePosixPath(match.group(1)).parent)
+    if re.search(r"\$\{TRIM_APPDEST\}:" + re.escape(sock_dir) + r"(\s|$)", compose):
+        ok(f"网关 socket 目录 {sock_dir} 已从 ${{TRIM_APPDEST}} 挂进容器")
+    else:
+        bad(f"网关 socket 放在 {sock_dir}，但 docker-compose.yaml 没有把 ${{TRIM_APPDEST}} 挂到那里")
+else:
+    warn("entrypoint-fnos.sh 里没找到 USBSHARE_GATEWAY_SOCKET 的默认值")
+
+# --- 10. compose 项目名必须等于 appname --------------------------------
+# 项目名不对，应用中心的 `docker compose start` 会报
+# `service "server" has no container to start`（error code 12005）。
+match = re.search(r"^name:\s*(\S+)\s*$", compose, re.M)
+project = match.group(1) if match else ""
+if project and project == appname:
+    ok(f"docker-compose.yaml 的 name={project} 与 appname 一致")
+else:
+    bad(f"docker-compose.yaml 的 name 必须是 appname（{appname}），当前是 {project!r}")
+
+raise SystemExit(1 if failed else 0)
+PY
+    [ $? -ne 0 ] && FAILED=$((FAILED + 1))
+else
+    warn "没有 python3，跳过配置链一致性校验"
 fi
 
 section "manifest"
@@ -149,6 +405,17 @@ if [ -f "${PKG_DIR}/manifest" ]; then
         fi
     else
         warn "manifest 没有 desktop_applaunchname"
+    fi
+    # changelog 必须提到当前版本，否则应用中心里"更新说明"与版本对不上
+    # （升了版本号却忘了写这一版的说明，用户看到的还是上一版的）。
+    ver=$(sed -n 's/^version[[:space:]]*=[[:space:]]*//p' "${PKG_DIR}/manifest" | tr -d ' \r')
+    clog=$(sed -n 's/^changelog[[:space:]]*=[[:space:]]*//p' "${PKG_DIR}/manifest")
+    if [ -z "${clog}" ]; then
+        warn "manifest 没有 changelog"
+    elif [ -n "${ver}" ] && ! printf '%s' "${clog}" | grep -q "${ver}"; then
+        warn "manifest 的 changelog 里没有提到当前版本 ${ver}（应用中心里看到的更新说明会和版本号对不上）"
+    else
+        ok "changelog 提到了当前版本 ${ver}"
     fi
 fi
 
@@ -195,6 +462,30 @@ for f in "${PKG_DIR}"/cmd/*; do
     if [ "${name}" = "lib-config.sh" ]; then continue; fi
     if [ -x "${f}" ]; then ok "${name} 可执行"; else bad "${name} 缺少可执行位"; fi
 done
+
+section "包装脚本语法（容器里 /bin/sh 就是 dash）"
+for f in app/docker/fnos-env.sh app/docker/entrypoint-fnos.sh app/docker/healthcheck-fnos.sh; do
+    if sh -n "${PKG_DIR}/${f}" 2>/dev/null; then
+        ok "${f} sh 语法通过"
+    else
+        bad "${f} sh 语法错误（容器里由 dash 执行，写 bash 专有语法会直接起不来）"
+    fi
+done
+if command -v python3 >/dev/null 2>&1; then
+    # 用 ast.parse 而不是 py_compile：后者会在包目录里留下 __pycache__。
+    if python3 - "${PKG_DIR}/app/docker/fnos-unix-proxy.py" <<'PY'
+import ast
+import pathlib
+import sys
+
+ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+PY
+    then
+        ok "app/docker/fnos-unix-proxy.py 语法通过"
+    else
+        bad "app/docker/fnos-unix-proxy.py 语法错误"
+    fi
+fi
 
 section "docker-compose 与 Dockerfile"
 compose="${PKG_DIR}/app/docker/docker-compose.yaml"

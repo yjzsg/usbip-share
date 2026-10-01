@@ -32,6 +32,11 @@ usbshare_clean() {
 # 返回码 2 = 文件存在但当前用户读不了。调用方必须中止，不能继续用空值覆盖 ——
 # 否则一次属主/权限错乱就会静默把管理页密码和共享访问密码清空（实测踩过：
 # 用 root 改过 env 文件后属主变成 root，包用户读不到，config_callback 就把两个密码都写空了）。
+#
+# 写盘的值是**原样**的（不做引号转义，见 usbshare_write_env），所以读回来的方式
+# 必须同样是"取第一个 = 之后的整行原文"：绝不能把文件交给 shell 去 source ——
+# 密码里的空格/$/反引号会被 shell 拆分或展开（容器侧对应
+# app/docker/fnos-env.sh 的 usbshare_load_env_file，两边必须保持同一套约定）。
 usbshare_current() {
     local key="$1" fallback="$2" value=""
     if [ -f "${USBSHARE_ENV_FILE}" ]; then
@@ -39,7 +44,9 @@ usbshare_current() {
             usbshare_log "ERROR: ${USBSHARE_ENV_FILE} 存在但当前用户读不了（属主或权限不对）。拒绝用空值覆盖它，以免静默清掉管理页密码与共享访问密码。"
             return 2
         fi
-        value=$(sed -n "s/^${key}=//p" "${USBSHARE_ENV_FILE}" | tail -n 1)
+        # tr -d '\r'：文件被 Windows 编辑器改过会变成 CRLF，带 CR 的值会被
+        # usbshare_valid_port 之类判成非法而悄悄落回默认值。
+        value=$(sed -n "s/^${key}=//p" "${USBSHARE_ENV_FILE}" | tail -n 1 | tr -d '\r')
     fi
     if [ -z "${value}" ]; then
         printf '%s' "${fallback}"
@@ -82,6 +89,11 @@ usbshare_pick_seconds() {
     esac
 }
 
+# 写 env 文件。约定（两侧必须一致）：
+#   * 键值原样写，**不做引号转义** —— 文件是给人看的，README 也鼓励手工改；
+#   * 每个值都必须是单行（调用方已经过 usbshare_clean / usbshare_current，
+#     不会带 \r\n）；多行内容会把文件切碎；
+#   * 读回来的一方只按"第一个 = 之后的整行原文"解析，不 source、不 eval。
 usbshare_write_env() {
     local port="$1" password="$2" busids="$3" load_module="$4" unbind_on_exit="$5" kick_idle="$6"
     local restore_shared="$7" access_password="$8"
@@ -181,15 +193,24 @@ usbshare_apply_wizard() {
 
     # 共享访问密码。
     #
-    # 交互上踩过一个真实的坑：最初用「开关 access_enabled + 密码」两个字段，
-    # 用户在应用设置里填了密码但没拨开关（或 fnOS 提交的是开关的 initValue=false），
-    # 密码就被静默丢掉、访问控制根本没生效，界面上还看不出异常。
-    # 现在改成显式三态，并且「选了启用却没给密码」会直接报错中止，不再静默降级：
-    #   * access_mode=disable → 明确关闭，清空密码
+    # 交互上踩过两个真实的坑：
+    #   1. 最初用「开关 access_enabled + 密码」两个字段，用户在应用设置里填了密码
+    #      但没拨开关（或 fnOS 提交的是开关的 initValue=false），密码就被静默丢掉、
+    #      访问控制根本没生效，界面上还看不出异常。
+    #   2. 改成三态之后，**安装向导**里仍然是「radio access_mode（默认 disable）+
+    #      密码框」：用户填了密码、却没把默认的「不启用」改成「启用」，
+    #      radio 提交的就是 disable → 密码又被静默丢掉。manifest 的 1.3.1 变更说明
+    #      声称已修，其实只修了应用设置这一侧。
+    # 现在「选了关闭却填了密码」这种自相矛盾的输入一律报错中止，不再静默丢值：
+    #   * access_mode=disable → 必须留空密码，明确关闭并清空
     #   * access_mode=enable  → 用新填的密码；没填就沿用当前值；两者都没有则报错
     #   * 其余（keep / 安装向导未提供）→ 填了就启用，否则保持当前值
     case "$(printf '%s' "${w_access_mode}" | tr 'A-Z' 'a-z')" in
         disable | off | false)
+            if [ -n "${w_access_password}" ]; then
+                usbshare_log "ERROR: 选择了「不启用 / 关闭」共享访问密码，却又填写了密码。请二选一：要启用就选「启用」并保留密码；要关闭就把密码框清空。"
+                return 1
+            fi
             new_access_password=""
             ;;
         enable | on | true)

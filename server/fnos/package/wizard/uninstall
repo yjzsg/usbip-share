@@ -4,7 +4,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "卸载会停止并删除容器与镜像。设备名称/备注、管理页密码等数据保存在应用数据目录（<code>@appdata/usbip-share</code>），默认<b>保留</b>，方便以后重装。"
+                "helpText": "卸载会停止并删除容器与镜像。用户数据放在两个目录里：应用数据目录 <code>@appdata/usbip-share</code>（设备名称/备注、密码散列、等待名单）与应用配置目录 <code>@appconf/usbip-share/usbip-share.env</code>（<b>明文</b>的管理页密码与共享访问密码）。两个目录默认都<b>保留</b>，方便以后重装。"
             },
             {
                 "type": "radio",
@@ -13,11 +13,11 @@
                 "initValue": "false",
                 "options": [
                     {
-                        "label": "保留数据（推荐，重装后设备名称与密码还在）",
+                        "label": "保留数据（推荐，重装后设备名称与备注还在）",
                         "value": "false"
                     },
                     {
-                        "label": "删除全部数据（设备名称/备注、管理页密码都会丢失，不可恢复）",
+                        "label": "删除全部数据（设备名称/备注、管理页密码与共享访问密码都会丢失，不可恢复）",
                         "value": "true"
                     }
                 ]

@@ -16,23 +16,37 @@ mkdir -p /data
 # 容器用 host 网络，内部端口就是宿主端口，所以不能写死：
 #   * 沿用上一次挑好的端口（已记在 /data/internal-ports.env），前提是它们仍然空闲；
 #   * 否则重新挑，并写回文件，让 healthcheck 读到同一组。
-if [ -n "${USBIP_INNER_USBIPD_PORT}" ] && usbshare_port_free "${USBIP_INNER_USBIPD_PORT}"; then
+#
+# 另外必须避开对外端口 USBIP_PORT：挑端口的时候网关还没起来，对外端口在
+# 宿主上此刻是空闲的，而 pick_free_port 只会从内核临时端口范围（本机
+# 32768-60999，见 /proc/sys/net/ipv4/ip_local_port_range）里取——用户把
+# 应用端口设成这个区间里的值（例如 45000）时就有可能撞上。撞上以后网关
+# EADDRINUSE 起不来，容器退出；重启时 /data/internal-ports.env 里存的还是
+# 那个值、又判定"空闲"，于是变成永远起不来的重启循环。这里显式排除。
+if [ -n "${USBIP_INNER_USBIPD_PORT}" ] && [ "${USBIP_INNER_USBIPD_PORT}" != "${USBIP_PORT}" ] \
+    && usbshare_port_free "${USBIP_INNER_USBIPD_PORT}"; then
     :
 else
     USBIP_INNER_USBIPD_PORT=$(usbshare_pick_free_port)
     printf '%s\n' "[usbip-share] picked internal usbipd port ${USBIP_INNER_USBIPD_PORT}" >&2
 fi
 
-if [ -n "${USBIP_WEB_PORT}" ] && usbshare_port_free "${USBIP_WEB_PORT}"; then
+if [ -n "${USBIP_WEB_PORT}" ] && [ "${USBIP_WEB_PORT}" != "${USBIP_PORT}" ] \
+    && [ "${USBIP_WEB_PORT}" != "${USBIP_INNER_USBIPD_PORT}" ] \
+    && usbshare_port_free "${USBIP_WEB_PORT}"; then
     :
 else
     USBIP_WEB_PORT=$(usbshare_pick_free_port)
     printf '%s\n' "[usbip-share] picked internal web port ${USBIP_WEB_PORT}" >&2
 fi
 
-if [ "${USBIP_INNER_USBIPD_PORT}" = "${USBIP_WEB_PORT}" ]; then
+# pick_free_port 有极小概率正好挑中对外端口（或与 usbipd 端口相同），这里兜住。
+while [ "${USBIP_INNER_USBIPD_PORT}" = "${USBIP_PORT}" ]; do
+    USBIP_INNER_USBIPD_PORT=$(usbshare_pick_free_port)
+done
+while [ "${USBIP_WEB_PORT}" = "${USBIP_PORT}" ] || [ "${USBIP_WEB_PORT}" = "${USBIP_INNER_USBIPD_PORT}" ]; do
     USBIP_WEB_PORT=$(usbshare_pick_free_port)
-fi
+done
 
 umask 077
 {
