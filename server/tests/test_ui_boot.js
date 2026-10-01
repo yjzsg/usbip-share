@@ -164,7 +164,7 @@ async function run(options = {}) {
   r.el('statusFilter').value = 'unshared';
   r.el('statusFilter').listeners.get('change')();
   check('筛选未共享设备', r.el('content').innerHTML.includes('Scanner') && !r.el('content').innerHTML.includes('算王1'));
-  check('筛选不改变总数统计', r.el('totalCount').textContent === 2 && r.el('count').textContent === '显示 1 / 2 个');
+  check('筛选不改变总数统计', r.el('totalCount').textContent === 2 && r.el('count').textContent === '显示 1 / 共 2 台');
   r.el('statusFilter').value = 'shared';
   r.el('statusFilter').listeners.get('change')();
   check('筛选共享设备', r.el('content').innerHTML.includes('算王1') && !r.el('content').innerHTML.includes('Scanner'));
@@ -175,7 +175,7 @@ async function run(options = {}) {
   r.el('deviceSearch').listeners.get('input')();
   check('搜索无结果有独立空状态', r.el('content').innerHTML.includes('没有匹配的设备'));
   r.el('clearFilters').onclick();
-  check('清除筛选恢复完整列表', r.el('deviceSearch').value === '' && r.el('statusFilter').value === 'all' && r.el('count').textContent === '显示 2 / 2 个');
+  check('清除筛选恢复完整列表', r.el('deviceSearch').value === '' && r.el('statusFilter').value === 'all' && r.el('count').textContent === '共 2 台');
   r = await run({devices: []});
   check('真正无设备有独立空状态', r.el('content').innerHTML.includes('没有发现 USB 设备'));
 

@@ -704,7 +704,10 @@
         return [device.alias, device.description, device.remark, device.busid, device.vidpid, device.bindingLabel, ...owners, ...waiters]
           .join(' ').toLocaleLowerCase().includes(query);
       });
-      document.getElementById('count').textContent = `显示 ${visibleDevices.length} / ${devices.length} 个`;
+      // 没筛选时只说总数；有筛选才显示「显示 N / 共 M 台」，避免出现 4 / 4 这种绕的写法。
+      document.getElementById('count').textContent = visibleDevices.length === devices.length
+        ? `共 ${devices.length} 台`
+        : `显示 ${visibleDevices.length} / 共 ${devices.length} 台`;
       document.getElementById('clearFilters').hidden = !query && filter === 'all';
       if (!visibleDevices.length) {
         const message = devices.length ? '没有匹配的设备。' : '没有发现 USB 设备。';
