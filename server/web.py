@@ -406,11 +406,41 @@ def access_ttl_seconds() -> int:
 
 
 def _read_access_grants() -> dict[str, dict[str, object]]:
-    """Raw authorization table as {address: record}; never raises."""
-    raw = read_json_file(ACCESS_FILE, None)
+    """Raw authorization table as {address: record}; never raises.
+
+    "读不出来"和"表是空的"在这里是同一个结果 —— 调用方只读不写,宁可当作没有
+    任何授权(拒绝一切)。**写路径不能这样**:见 _read_access_grants_strict()。
+    """
+    try:
+        return _read_access_grants_strict()
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot read {ACCESS_FILE}: {exc}", flush=True)
+        return {}
+
+
+def _read_access_grants_strict() -> dict[str, dict[str, object]]:
+    """Raw authorization table; raises OSError when the file is unreadable.
+
+    Distinguishing "no file yet" from "file exists but is corrupt" is what keeps a
+    single corrupt read from destroying the table: a read-modify-write that treats
+    a parse failure as "empty" would silently drop every existing authorization
+    (one authorized client's request would wipe everybody else's grant, and the
+    gateway would keep denying them with no visible reason).
+    """
+    try:
+        raw_text = ACCESS_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    if not raw_text.strip():
+        # 空文件:不是合法 JSON,但也绝不可能是"表里有东西",按空表处理。
+        return {}
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise OSError(f"{ACCESS_FILE} is not valid JSON: {exc}") from exc
     clients = raw.get("clients", {}) if isinstance(raw, dict) else {}
     if not isinstance(clients, dict):
-        return {}
+        raise OSError(f"{ACCESS_FILE} has an invalid 'clients' field")
     grants: dict[str, dict[str, object]] = {}
     for address, record in clients.items():
         if not isinstance(address, str) or not isinstance(record, dict):
@@ -482,6 +512,16 @@ def sync_access_file() -> None:
     if not access_required():
         remove_access_file()
         return
+    if not os.environ.get(Handler.PROXY_SECRET_ENV, ""):
+        print(
+            "[usbip-share-web] WARNING: "
+            f"{Handler.PROXY_SECRET_ENV} is not set, so the gateway's PROXY line "
+            "cannot be verified. Any process that can reach this web port directly "
+            "could claim to be an authorized source IP and bypass the shared-access "
+            "password. Rebuild the container with the current entrypoint.sh (it "
+            "generates the secret) or set the variable yourself.",
+            flush=True,
+        )
     try:
         _write_access_grants({})
         print(
@@ -535,7 +575,7 @@ def access_authorize(address: str, client_id: str, client_name: str) -> dict[str
         "expiresAt": int(now) + access_ttl_seconds(),
     }
     with _ACCESS_LOCK:
-        grants = _read_access_grants()
+        grants = _read_access_grants_strict()
         grants[address] = record
         _write_access_grants(grants)
     return record
@@ -551,7 +591,7 @@ def access_renew(address: str) -> dict[str, object] | None:
         return None
     now = time.time()
     with _ACCESS_LOCK:
-        grants = _read_access_grants()
+        grants = _read_access_grants_strict()
         record = grants.get(address)
         if not isinstance(record, dict):
             return None
@@ -567,9 +607,13 @@ def access_renew(address: str) -> dict[str, object] | None:
 
 
 def access_revoke(address: str | None) -> int:
-    """Drop one authorization, or every one when `address` is empty."""
+    """Drop one authorization, or every one when `address` is empty.
+
+    Raises OSError when the table cannot be read: a revoke that cannot see the
+    current table must not overwrite it with a guessed (empty) one.
+    """
     with _ACCESS_LOCK:
-        grants = _read_access_grants()
+        grants = _read_access_grants_strict()
         if address:
             removed = 1 if grants.pop(address, None) is not None else 0
         else:
@@ -2297,7 +2341,13 @@ class Handler(BaseHTTPRequestHandler):
     # 单端口网关转发的 HTTP 连接会先补一行 PROXY v1 头(见 gateway.proxy_header):
     # 否则 web.py 看到的对端永远是网关自己,按来源 IP 做访问控制就无从谈起。
     PROXY_LINE_PREFIX = b"PROXY "
-    PROXY_LINE_MAX_BYTES = 108  # RFC 里的上限,留足余量
+    PROXY_LINE_MAX_BYTES = 160
+    # 行尾的校验标记:与 gateway.proxy_token() 用同一秘密派生出同一值。
+    PROXY_SECRET_ENV = "USBIP_PROXY_SECRET"
+    PROXY_TOKEN_LENGTH = 16
+    # 等这行头最多多久。网关在连接建立后立刻写出它,正常是毫秒级;设短超时是为了
+    # 让"只发了半行头就不再说话"的连接尽快落到 HTTP 解析上,而不是占着线程。
+    PROXY_LINE_WAIT_SECONDS = float(os.environ.get("USBIP_PROXY_WAIT_SECONDS", "2") or 2)
     # 由 setup() 填入;类属性只是兜底,避免任何路径拿到未定义属性。
     peer_address = ""
 
@@ -2306,48 +2356,88 @@ class Handler(BaseHTTPRequestHandler):
         self.peer_address = self.client_address[0] if self.client_address else ""
         self._consume_gateway_proxy_line()
 
+    @staticmethod
+    def proxy_token(secret: str) -> str:
+        """PROXY 行校验标记;secret 为空时返回空串(旧格式,不校验)。"""
+        if not secret:
+            return ""
+        return hashlib.sha256(f"usbip-share-proxy|{secret}".encode("utf-8")).hexdigest()[:16]
+
     def _consume_gateway_proxy_line(self) -> None:
         """Read the optional PROXY v1 line the single-port gateway prepends.
 
-        Only a loopback peer may announce a source address: the gateway relays
-        from 127.0.0.1, whereas a direct connection from the network (or the
-        fnOS unix-socket proxy) has no business claiming to be somebody else.
-        Absent the line, the socket peer is used — i.e. exactly the old
-        behaviour, which is what keeps direct/management traffic unchanged.
+        **信任边界**:PROXY v1 头自身没有任何认证,而"对端是回环地址"并不能证明
+        对面就是网关 —— 在 host 网络 / 非网关部署里,web.py 的端口本身也可能被
+        局域网或本机其它进程直连,那种连接同样来自回环或本机地址。仅凭回环就采信
+        这行头,攻击者只要自己写一行 ``PROXY TCP4 <已授权IP> ...`` 就能冒充授权来源,
+        直接绕过访问控制与按 IP 的登录限速。
+
+        因此只有**同时**满足下面两点才采信:
+          1. 对端是回环地址(排除"远程直连伪造",旧行为保留);
+          2. 行尾带着 ``USBIP_PROXY_SECRET`` 派生的校验标记(证明来自网关)。
+        秘密没配置时(旧版 entrypoint.sh)退回第 1 条 —— 与旧版逐字节一致,同时在
+        启动日志里告警(见 sync_access_file)。
+
+        不满足时这行头**一个字节都不消费**,交给 HTTP 解析(等价于直连,对端就是
+        socket 对端),所以正常请求不会被这行判断吃掉。
         """
         try:
             if not ipaddress.ip_address(self.peer_address).is_loopback:
                 return
         except ValueError:
             return
-        # Peek (do not consume) so a normal request line is left untouched for
-        # handle_one_request(). Read in a loop: the prefix may arrive split.
+        try:
+            original_timeout = self.connection.gettimeout()
+        except OSError:
+            original_timeout = None
         peeked = b""
         try:
+            # 只给"看这行头"设一个短超时,拿到(或放弃)之后立刻恢复,免得把
+            # 15s 的连接超时留给一个永远不把行头发完的对端。
+            self.connection.settimeout(self.PROXY_LINE_WAIT_SECONDS)
+            # Peek(不消费)以便把非 PROXY 开头的正常请求行原样留给
+            # handle_one_request()。循环读:前缀可能被分片。
             while len(peeked) < len(self.PROXY_LINE_PREFIX):
                 chunk = self.connection.recv(len(self.PROXY_LINE_PREFIX) - len(peeked), socket.MSG_PEEK)
                 if not chunk:
                     return
                 peeked += chunk
+            if peeked != self.PROXY_LINE_PREFIX:
+                return
+            try:
+                line = self.rfile.readline(self.PROXY_LINE_MAX_BYTES)
+            except (OSError, ValueError):
+                return
+            parts = line.decode("latin-1").strip().split(" ")
+            # 6 段 = 旧版网关(无标记);7 段 = 带校验标记。多一段少一段都不认。
+            if len(parts) not in (6, 7) or parts[0] != "PROXY" or parts[1] not in ("TCP4", "TCP6"):
+                return
+            # Keep the wire string verbatim: the authorization table is keyed by
+            # exactly what the gateway put in the line, so normalising here (e.g.
+            # IPv4-mapped IPv6) would make the two sides disagree.
+            try:
+                ipaddress.ip_address(parts[2])
+            except ValueError:
+                return
+            secret = os.environ.get(self.PROXY_SECRET_ENV, "")
+            if secret:
+                expected = self.proxy_token(secret)
+                if len(parts) != 7 or not hmac.compare_digest(parts[6], expected):
+                    print(
+                        "[usbip-share-web] rejected a PROXY line without a valid "
+                        f"{self.PROXY_SECRET_ENV} token from {self.peer_address}; "
+                        "treating the connection as a direct request",
+                        flush=True,
+                    )
+                    return
+            self.peer_address = parts[2]
         except (OSError, ValueError):
             return
-        if peeked != self.PROXY_LINE_PREFIX:
-            return
-        try:
-            line = self.rfile.readline(self.PROXY_LINE_MAX_BYTES)
-        except (OSError, ValueError):
-            return
-        parts = line.decode("latin-1").strip().split(" ")
-        if len(parts) != 6 or parts[1] not in ("TCP4", "TCP6"):
-            return
-        # Keep the wire string verbatim: the authorization table is keyed by
-        # exactly what the gateway put in the line, so normalising here (e.g.
-        # IPv4-mapped IPv6) would make the two sides disagree.
-        try:
-            ipaddress.ip_address(parts[2])
-        except ValueError:
-            return
-        self.peer_address = parts[2]
+        finally:
+            try:
+                self.connection.settimeout(original_timeout)
+            except OSError:
+                pass
 
     def peer_ip(self) -> str:
         """Observed source address of this request (gateway-announced if any)."""
@@ -2502,9 +2592,9 @@ class Handler(BaseHTTPRequestHandler):
             access_authorize(address, client_id.strip(), client_name.strip())
         except OSError as exc:
             # Never echo the raw OSError back: it leaks container paths.
-            print(f"[usbip-share-web] cannot write {ACCESS_FILE}: {exc}", flush=True)
+            print(f"[usbip-share-web] cannot update {ACCESS_FILE}: {exc}", flush=True)
             self.send_json(
-                {"ok": False, "error": "保存授权失败，请稍后重试"},
+                {"ok": False, "error": "授权表不可读或写入失败，请稍后重试"},
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
             return
@@ -2795,7 +2885,16 @@ class Handler(BaseHTTPRequestHandler):
                 address = ""
             # 不带 address(或空字符串)= 吊销全部。注意:吊销只影响**新**连接,
             # 已经建立的 USB/IP 会话不会因此断开(网关只在连接建立时判定一次)。
-            removed = access_revoke(address.strip() or None)
+            try:
+                removed = access_revoke(address.strip() or None)
+            except OSError as exc:
+                # 读不出当前授权表就不动它:按"空表"重写会把别人的授权一起抹掉。
+                print(f"[usbip-share-web] cannot read {ACCESS_FILE}: {exc}", flush=True)
+                self.send_json(
+                    {"ok": False, "error": "授权表损坏或不可读，未做任何修改；请检查/删除授权表文件后重试"},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
             print(
                 f"[usbip-share-web] access revoked: {address.strip() or 'all clients'} "
                 f"({removed} removed)",

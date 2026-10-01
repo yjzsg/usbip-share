@@ -28,6 +28,22 @@ fail() {
 # 共享访问密码的授权表:web.py 写,gateway.py 读。文件存在 = 已启用访问控制。
 # USBIP_ACCESS_PASSWORD 为空(默认)时 web.py 会删掉它,网关放行一切。
 : "${USBIP_ACCESS_FILE:=/run/usbip/authorized-clients.json}"
+# PROXY 行的校验秘密:网关补的那行 PROXY v1 头本身没有认证,谁先连上 web.py 的
+# 端口谁就能声称自己是任意来源 IP(web.py 只能看到对端是回环,分不清"网关"和
+# "本机上任意进程")。两边用同一个秘密派生一个标记,web.py 只认带标记的行。
+# 没显式设置时这里生成一个随机值;用户也可以自己指定(会覆盖)。
+# 注意:这个变量必须同时传给 web.py 与 gateway.py —— 两个子进程都继承本脚本的
+# 环境,所以 export 一次即可。改了它只换掉校验标记,不影响已经建立的授权。
+: "${USBIP_PROXY_SECRET:=}"
+if [ -z "$USBIP_PROXY_SECRET" ]; then
+    USBIP_PROXY_SECRET=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || true)
+fi
+if [ -z "$USBIP_PROXY_SECRET" ]; then
+    # 极老的内核/受限容器没有 random/uuid:退化成"时间戳+pid"。这不是密码学随机,
+    # 但攻击者要猜的只是"能不能直连 web 端口",暴露面本身就不该存在。
+    USBIP_PROXY_SECRET="fallback-$$-$(date +%s%N 2>/dev/null || date +%s)"
+fi
+export USBIP_PROXY_SECRET
 
 case "$USBIP_PORT" in
     ''|*[!0-9]*) fail "USBIP_PORT must be a number: $USBIP_PORT" ;;

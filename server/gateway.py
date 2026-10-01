@@ -16,6 +16,7 @@ HTTP keep-alive、管理 API 与网页都走同一个对外端口。这样 NAS �
 放行一切 —— 也就是本文件在引入该功能之前的行为,默认路径上逐字节不变。
 """
 import argparse
+import hashlib
 import json
 import os
 import socket
@@ -31,6 +32,14 @@ DENY_LOG_INTERVAL_SECONDS = 60.0
 DENY_LOG_MAX_ENTRIES = 4096
 # 与 web.py 里 Handler.PROXY_LINE_PREFIX 保持一致。
 PROXY_LINE_PREFIX = "PROXY "
+# web.py 用这个环境变量里的同一个秘密校验 PROXY 行。为空 = 退化成旧版无校验行为
+# (见 proxy_token() 的说明),entrypoint.sh 总会生成一个。
+PROXY_SECRET_ENV = "USBIP_PROXY_SECRET"
+PROXY_TOKEN_LENGTH = 16
+# 授权表被原子替换后 mtime 未必变化(有些文件系统的 mtime 粒度很粗),所以除了
+# 比对 stat 字段,还强制每秒重读一次:宁可多读一个小 JSON,也不能让一次 revoke
+# 被静默忽略。
+ACCESS_RELOAD_INTERVAL_SECONDS = 1.0
 
 _DENY_LOG_LOCK = threading.Lock()
 _DENY_LOGGED: dict[str, float] = {}
@@ -44,21 +53,28 @@ def env_int(name: str, default: int) -> int:
 
 
 class AccessGate:
-    """授权表(Access Table)只读视图,带 mtime 缓存。
+    """授权表(Access Table)只读视图,带变更检测。
 
     文件就是开关:
 
       * 文件不存在 → 访问控制关闭,``allows()`` 恒为 True(默认,行为不变);
       * 文件存在   → 只有表里且未过期的地址放行。空表 = 全部拒绝。
 
-    每个连接都读一次盘既慢又没必要,所以按 ``st_mtime_ns`` 缓存;文件被 web.py
-    原子替换后 mtime 必然变化,下一次连接就会重新加载。文件消失(关闭访问控制)
-    也会被察觉 —— 那一步必须每次 stat,否则永远发现不了"开关被关掉"。
+    每个连接都读一次盘既慢又没必要,所以按 stat 字段(mtime/inode/size)缓存。
+    但**不能只认 mtime**:``web.py`` 用 ``os.replace`` 原子替换文件,而有些文件系统
+    (粗粒度时间戳、时钟回拨)会让新旧文件的 mtime 相同,缓存就会一直返回旧结论 ——
+    一次 revoke 被静默忽略正是 fail-open。因此:
+      * stat 字段任一变化 → 重读;
+      * 距上次加载超过 ACCESS_RELOAD_INTERVAL_SECONDS → 无条件重读(兜底);
+      * 文件消失(关闭访问控制)每次都能察觉 —— 那一步必须 stat。
     """
 
     def __init__(self, path: str | os.PathLike[str]) -> None:
         self.path = str(path)
         self._mtime_ns: int | None = None
+        self._ino: int | None = None
+        self._size: int | None = None
+        self._loaded_at = 0.0
         self._loaded = False
         self._entries: dict[str, float] = {}
         # 测试用:实际重新加载的次数,用来证明缓存真的生效。
@@ -72,6 +88,8 @@ class AccessGate:
                 self._loaded = False
                 self._entries = {}
                 self._mtime_ns = None
+                self._ino = None
+                self._size = None
                 self.reloads += 1
                 print(
                     f"[usbip-share-gateway] access file {self.path} is gone: "
@@ -79,10 +97,20 @@ class AccessGate:
                     flush=True,
                 )
             return
-        if self._loaded and self._mtime_ns == stat.st_mtime_ns:
+        unchanged = (
+            self._loaded
+            and self._mtime_ns == stat.st_mtime_ns
+            and self._ino == stat.st_ino
+            and self._size == stat.st_size
+            and (time.monotonic() - self._loaded_at) < ACCESS_RELOAD_INTERVAL_SECONDS
+        )
+        if unchanged:
             return
         was_loaded = self._loaded
         self._mtime_ns = stat.st_mtime_ns
+        self._ino = stat.st_ino
+        self._size = stat.st_size
+        self._loaded_at = time.monotonic()
         self._loaded = True
         self._entries = self._parse()
         self.reloads += 1
@@ -151,20 +179,47 @@ def log_denied(address: str) -> bool:
     return True
 
 
-def proxy_header(address: str, source_port: int, local: object) -> bytes:
+def proxy_secret() -> str:
+    """网关与 web.py 共享的 PROXY 校验秘密(见 proxy_token)。"""
+    return os.environ.get(PROXY_SECRET_ENV, "")
+
+
+def proxy_token(secret: str) -> str:
+    """由共享秘密派生的 PROXY 行校验标记。
+
+    **信任边界**:PROXY v1 头本身没有任何认证,谁先连上 web.py 的端口谁就能声称
+    自己是任意来源 IP。而 web.py 只能看到"对端是回环地址",这不足以区分"网关"
+    与"本机上/同主机网络命名空间里的任意进程"。所以网关在 PROXY 行末尾附一个
+    只有两边知道的标记;没有这个标记的 PROXY 行一律按普通 HTTP 请求处理(等价于
+    直连,对端地址就是 socket 对端)。
+
+    ``secret`` 为空时返回空串 —— 调用方据此退回旧版"不带标记"的格式,保证只升级
+    这两个 .py 文件、没更新 entrypoint.sh 的部署不会被卡死(代价是那段时间没有
+    这道校验,README 里已注明必须让 entrypoint.sh 生成秘密)。
+    """
+    if not secret:
+        return ""
+    return hashlib.sha256(f"usbip-share-proxy|{secret}".encode("utf-8")).hexdigest()[:PROXY_TOKEN_LENGTH]
+
+
+def proxy_header(address: str, source_port: int, local: object, secret: str = "") -> bytes:
     """PROXY v1 头:把真实来源 IP 告诉 web.py。
 
     网关只是 TCP 转发,web.py 看到的对端永远是网关自己,按来源 IP 做访问控制就
     无从谈起。这行头只在**访问控制开启时**才补(见 GatewayHandler.handle),所以
     没设密码的老部署(以及不认识这行头的老 web.py)行为完全不变。
+
+    行尾的校验标记由 ``proxy_token()`` 生成;为空时退回 6 字段的旧格式。
     """
     family = "TCP6" if ":" in address else "TCP4"
     destination, destination_port = "0.0.0.0", 0
     if isinstance(local, tuple) and len(local) >= 2:
         destination, destination_port = str(local[0]), int(local[1])
-    return f"PROXY {family} {address} {destination} {source_port} {destination_port}\r\n".encode(
-        "ascii", "replace"
-    )
+    line = f"PROXY {family} {address} {destination} {source_port} {destination_port}"
+    token = proxy_token(secret)
+    if token:
+        line += f" {token}"
+    return (line + "\r\n").encode("ascii", "replace")
 
 
 # 首字节的等待上限:连上却一个字节都不发的连接(慢速连接攻击)不能永远占着线程。
@@ -266,7 +321,7 @@ class GatewayHandler(socketserver.BaseRequestHandler):
                 except OSError:
                     local = None
                 source_port = self.client_address[1] if len(self.client_address) > 1 else 0
-                prefix = proxy_header(address, source_port, local)
+                prefix = proxy_header(address, source_port, local, self.server.proxy_secret)
             bridge(client, self.server.upstream_host, self.server.web_port, first, prefix)
             return
         # USB/IP 分支:授权表存在时,只有授权过且未过期的来源 IP 能连到 usbipd。
@@ -286,10 +341,13 @@ class Gateway(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def __init__(self, addr, upstream_host: str, usbip_port: int, web_port: int,
-                 access_file: str = DEFAULT_ACCESS_FILE) -> None:
+                 access_file: str = DEFAULT_ACCESS_FILE,
+                 proxy_secret_value: str | None = None) -> None:
         self.upstream_host = upstream_host
         self.usbip_port = usbip_port
         self.web_port = web_port
+        # 显式传入优先(测试用),否则读环境变量。取一次即可:进程运行期间不会变。
+        self.proxy_secret = proxy_secret() if proxy_secret_value is None else proxy_secret_value
         self.access = AccessGate(access_file)
         super().__init__(addr, GatewayHandler)
 
@@ -323,6 +381,15 @@ def main() -> None:
            if srv.access.enabled() else "no shared-access password, every client is allowed"),
         flush=True,
     )
+    if not srv.proxy_secret:
+        print(
+            f"[usbip-share-gateway] WARNING: {PROXY_SECRET_ENV} is empty, so the "
+            "PROXY line carries no verification token. Any process that can reach "
+            "the web port directly could then claim to be an authorized source IP. "
+            "Rebuild the container with the current entrypoint.sh (it generates the "
+            "secret) or set the variable yourself.",
+            flush=True,
+        )
     try:
         srv.serve_forever(poll_interval=0.5)
     finally:

@@ -43,6 +43,10 @@ import web  # noqa: E402
 TOKEN = "access-gate-admin-token"
 CLIENT_A = "203.0.113.7"
 CLIENT_B = "203.0.113.8"
+# 网关与 web.py 共享的 PROXY 校验秘密:web.py 只认带正确标记的 PROXY 行
+# (信任边界见 tests/test_access_boundary.py)。本用例里 gateway_call() 模拟网关,
+# 所以它必须像真网关一样把标记附上。
+PROXY_SECRET = "access-gate-proxy-secret"
 
 results = []
 
@@ -71,6 +75,7 @@ def use_config(root: Path):
     reset_guard()
     web._ENV_PASSWORD_APPLIED = None
     os.environ["USBIP_WEB_TOKEN"] = TOKEN
+    os.environ["USBIP_PROXY_SECRET"] = PROXY_SECRET
 
 
 def set_access_env(password: str, ttl: str | None = None):
@@ -116,7 +121,11 @@ def direct_call(path, payload=None, token=None, method=None):
 
 
 def gateway_call(peer, path, payload=None, token=None, method=None):
-    """用 PROXY v1 头模拟任意来源 IP 经单端口网关进来的请求。"""
+    """用带校验标记的 PROXY v1 头模拟任意来源 IP 经单端口网关进来的请求。
+
+    标记是必须的:web.py 只在 PROXY 行带着由 ``USBIP_PROXY_SECRET`` 派生的标记时
+    才采信这行头(否则谁都能直连 web 端口冒充授权来源)。真网关会自己补上它。
+    """
     body = json.dumps(payload).encode("utf-8") if payload is not None else b""
     method = method or ("POST" if body else "GET")
     head = [f"{method} {path} HTTP/1.1", "Host: 127.0.0.1", "Connection: close"]
@@ -126,7 +135,7 @@ def gateway_call(peer, path, payload=None, token=None, method=None):
         head.append(f"X-Admin-Token: {token}")
     head.append(f"Content-Length: {len(body)}")
     request = ("\r\n".join(head) + "\r\n\r\n").encode("utf-8") + body
-    prefix = f"PROXY TCP4 {peer} 127.0.0.1 40000 {PORT}\r\n".encode("ascii")
+    prefix = f"PROXY TCP4 {peer} 127.0.0.1 40000 {PORT} {web.Handler.proxy_token(PROXY_SECRET)}\r\n".encode("ascii")
     with socket.create_connection(("127.0.0.1", PORT), timeout=10) as sock:
         sock.sendall(prefix + request)
         raw = b""
@@ -383,7 +392,7 @@ check("关闭后 authorize 幂等成功且不重建文件",
       st == 200 and body.get("required") is False and not web.ACCESS_FILE.exists(), str(body))
 
 # ---------------------------------------------------------------------------
-print("[I] 网关判定函数：放行 / 拒绝 / 无文件放行 / 过期拒绝 / mtime 缓存")
+print("[I] 网关判定函数：放行 / 拒绝 / 无文件放行 / 过期拒绝 / 缓存与重读")
 gate_root = Path(tempfile.mkdtemp())
 gate_path = gate_root / "authorized-clients.json"
 now = time.time()
@@ -413,18 +422,30 @@ check("空表（访问控制已开启但没人授权）→ 全部拒绝，不是
 
 write_gate_table({"1.2.3.4": now + 600})
 check("重新加载后回到放行", gate.allows("1.2.3.4") is True)
+# 缓存：mtime 未变 → 不重新读盘，旧结论仍然生效（reloads 不增长）。
 reloads_before = gate.reloads
 pinned = gate_path.stat().st_mtime_ns
 gate_path.write_text(json.dumps({"version": 1, "clients": {"9.9.9.9": {"expiresAt": now + 600}}}),
                      encoding="utf-8")
 os.utime(gate_path, ns=(pinned, pinned))
-check("mtime 未变 → 不重新读盘（旧结论仍然生效，reloads 不增长）",
+check("mtime 未变 → 命中缓存，旧结论仍然生效（reloads 不增长）",
       gate.allows("1.2.3.4") is True and gate.allows("9.9.9.9") is False
       and gate.reloads == reloads_before, f"reloads={gate.reloads}")
+# 变更检测：mtime 变了（原子替换后正常就是这样）→ 立刻重读。
 os.utime(gate_path, ns=(pinned + 5_000_000_000, pinned + 5_000_000_000))
 check("mtime 变化 → 重新加载（reloads +1）",
       gate.allows("9.9.9.9") is True and gate.allows("1.2.3.4") is False
       and gate.reloads == reloads_before + 1, f"reloads={gate.reloads}")
+# 兜底：即使 stat 字段全都没变（有些文件系统 mtime 粒度粗 / 时钟回拨），也必须
+# 在一个刷新周期后读到新内容 —— 否则一次 revoke 会被静默忽略（fail-open）。
+pinned = gate_path.stat().st_mtime_ns
+gate_path.write_text(json.dumps({"version": 1, "clients": {"7.7.7.7": {"expiresAt": now + 600}}}),
+                     encoding="utf-8")
+os.utime(gate_path, ns=(pinned, pinned))
+gate._loaded_at -= gateway.ACCESS_RELOAD_INTERVAL_SECONDS + 1
+check("stat 字段全未变时，周期兜底仍会重读（revoke 不会被静默忽略）",
+      gate.allows("7.7.7.7") is True and gate.allows("9.9.9.9") is False,
+      f"reloads={gate.reloads}")
 gate_path.unlink()
 check("文件被删除 → 恢复放行一切（关闭访问控制）",
       gate.allows("203.0.113.7") is True and gate.enabled() is False)
@@ -435,6 +456,7 @@ check("文件损坏 → 拒绝一切（文件存在就是启用，宁可拒绝�
 with contextlib.redirect_stdout(io.StringIO()):
     proxy_v4 = gateway.proxy_header("192.168.1.21", 54321, ("192.168.1.10", 5555))
     proxy_v6 = gateway.proxy_header("fd00::1", 1234, ("fd00::2", 5555))
+    proxy_signed = gateway.proxy_header("192.168.1.21", 54321, ("192.168.1.10", 5555), PROXY_SECRET)
     gateway._DENY_LOGGED.clear()
     first_deny = gateway.log_denied("203.0.113.9")
     second_deny = gateway.log_denied("203.0.113.9")
@@ -443,6 +465,13 @@ check("PROXY 头（IPv4）格式正确",
       proxy_v4 == b"PROXY TCP4 192.168.1.21 192.168.1.10 54321 5555\r\n", repr(proxy_v4))
 check("PROXY 头（IPv6）用 TCP6",
       proxy_v6 == b"PROXY TCP6 fd00::1 fd00::2 1234 5555\r\n", repr(proxy_v6))
+check("PROXY 头带秘密时附上校验标记（与 web.py 派生的一致）",
+      proxy_signed == (
+          b"PROXY TCP4 192.168.1.21 192.168.1.10 54321 5555 "
+          + web.Handler.proxy_token(PROXY_SECRET).encode("ascii") + b"\r\n"),
+      repr(proxy_signed))
+check("秘密为空时退回 6 段旧格式（向后兼容）",
+      gateway.proxy_token("") == "" and gateway.proxy_header("1.1.1.1", 1, ("2.2.2.2", 2), "").count(b" ") == 5)
 check("拒绝日志：首次打印", first_deny is True)
 check("拒绝日志：同一 IP 节流（不再刷屏）", second_deny is False)
 check("拒绝日志：不同 IP 各打一次", other_deny is True)
@@ -558,9 +587,12 @@ e2e_file.write_text(json.dumps({"version": 1, "clients": {}}), encoding="utf-8")
 os.utime(e2e_file, ns=(time.time_ns() + 12_000_000_000, time.time_ns() + 12_000_000_000))
 with contextlib.redirect_stdout(io.StringIO()):
     http_reply = web_roundtrip(REQUEST)
-check("访问控制开启时，HTTP 连接带上 PROXY 头（web.py 才能知道真实来源 IP）",
+check("访问控制开启时，HTTP 连接带上带校验标记的 PROXY 头（web.py 才能知道真实来源 IP）",
       http_reply.startswith(b"PROXY TCP4 127.0.0.1 ")
-      and http_reply.endswith(REQUEST), repr(http_reply[:60]))
+      and http_reply.endswith(REQUEST)
+      and http_reply.split(b"\r\n")[0].endswith(
+          web.Handler.proxy_token(PROXY_SECRET).encode("ascii")),
+      repr(http_reply[:80]))
 
 e2e_file.unlink()
 with contextlib.redirect_stdout(io.StringIO()):
@@ -570,9 +602,10 @@ check("访问控制关闭时，HTTP 连接逐字节不变（没有 PROXY 头）"
 
 # 真网关 + 真 web.py：网关注入的 PROXY 头必须能被 web.py 正确吃掉，
 # 而且真实 HTTP 请求（而不是裸 socket）仍然照常解析 —— 如果 web.py 没消费这行头，
-# 请求行会变成 "PROXY TCP4 ..."，这里就会拿到 400 而不是 200。
+# 请求行会变成 "PROXY TCP4 ..."，这里就会拿到 400 而不是 200/401。
 real_gw = gateway.Gateway(("127.0.0.1", 0), "127.0.0.1",
-                          usbip_backend.server_address[1], PORT, str(e2e_file))
+                          usbip_backend.server_address[1], PORT, str(e2e_file),
+                          proxy_secret_value=PROXY_SECRET)
 threading.Thread(target=real_gw.serve_forever, daemon=True).start()
 real_port = real_gw.server_address[1]
 set_access_env(ACCESS_PASSWORD)

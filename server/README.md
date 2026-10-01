@@ -94,9 +94,12 @@ docker compose logs --tail 30
 `共享访问密码已启用…`。）
 
 > **部署提示**：`web.py` 与 `gateway.py` 都是 bind mount，改完 `docker compose up -d`
-> 重建容器即可生效；`entrypoint.sh` 仍然烧在镜像里（本次它只是把 `USBIP_ACCESS_FILE`
-> 显式传给两个进程，缺了它也不影响功能 —— 两个进程都会自己从同名环境变量取默认值），
-> 要更新它得重建镜像或手工拷进容器。
+> 重建容器即可生效；`entrypoint.sh` 仍然烧在镜像里（本次它把 `USBIP_ACCESS_FILE`
+> 与 `USBIP_PROXY_SECRET` 传给两个进程，缺了它也不影响功能 —— 两个进程都会自己从同名
+> 环境变量取默认值。**但 `USBIP_PROXY_SECRET` 只有新版 `entrypoint.sh` 会生成**，
+> 所以只替换两个 `.py` 而不更新 `entrypoint.sh` 时，PROXY 行的校验标记是空的，
+> 会退回旧行为并在日志里告警；要拿到完整的信任边界必须重建镜像或手工把新的
+> `entrypoint.sh` 拷进容器）。
 
 然后浏览器打开 `http://<NAS-IP>:5555/`：
 
@@ -123,6 +126,8 @@ docker compose logs --tail 30
 | `USBIP_ACCESS_PASSWORD` | 空 | **共享访问密码**。空 = 关闭访问控制（默认，行为与旧版完全一致）；非空 = 客户端必须先用它换取源 IP 授权才能连 USB/IP（见「共享访问密码」一节） |
 | `USBIP_ACCESS_TTL_SECONDS` | `43200` | 授权有效期（秒），默认 12 小时；客户端每拍心跳都会续期 |
 | `USBIP_ACCESS_FILE` | `/run/usbip/authorized-clients.json` | 授权表路径：`web.py` 写、`gateway.py` 读。**文件存在 = 访问控制开启**，删除即恢复放行 |
+| `USBIP_PROXY_SECRET` | 启动时随机生成 | 网关与 `web.py` 共享的 PROXY 校验秘密（见「网关怎么知道真实来源 IP」）。由 `entrypoint.sh` 生成并导出，正常不用手设；显式设置会覆盖生成值。**为空 = 退回旧版"只看回环"的行为并在日志里告警** |
+| `USBIP_PROXY_WAIT_SECONDS` | `2` | `web.py` 等网关那行 PROXY 头的最长时间（秒）。只作用于这一行，拿到/放弃后立刻恢复 15 秒连接超时 |
 | `USBIP_KICK_IDLE_SECONDS` | `60` | 客户端停止心跳多久后自动释放其共享设备（避免关机后僵尸占用）|
 | `USBIP_WATCHDOG_MISSED_RUNS` | `5` | 连续多少个 watchdog 周期无心跳才考虑释放（每周期 10s） |
 | `USBIPD_DEBUG` | `false` | 打开 usbipd 调试日志 |
@@ -200,12 +205,35 @@ USB/IP 数据连接才被放行。
 
 单端口网关是纯 TCP 转发，`web.py` 看到的对端永远是网关自己（127.0.0.1），
 按来源 IP 做控制就无从谈起。因此**访问控制开启时**，网关在转发的 HTTP 连接前面补一行
-`PROXY TCP4 <源IP> <本机IP> <源端口> <本机端口>\r\n`（PROXY protocol v1），
-`web.py` 只在"对端是回环地址"时才认这行头（直连的远程请求伪造不了）。
+`PROXY TCP4 <源IP> <本机IP> <源端口> <本机端口> <校验标记>\r\n`（PROXY protocol v1
+的 6 个字段 + 一个自定义校验标记），`web.py` 只在这行头**同时**满足下面两点时才采信：
+
+1. 对端是回环地址（挡掉从网络直连过来的伪造）；
+2. 行尾的校验标记等于由 `USBIP_PROXY_SECRET` 派生出的值（挡掉**本机/同网络命名空间里
+   的任意进程**直连 web 端口伪造）。
+
+**为什么不能只靠第 1 条**：PROXY v1 头本身没有任何认证，"对端是回环"并不能证明对面
+就是网关。在 host 网络部署、或有人把 `USBIP_WEB_HOST` 设成 `0.0.0.0`（`.env.example`
+默认值就是这个）时，web.py 的端口可以被直连 —— 任何能连上它的进程只要自己写一行
+`PROXY TCP4 <已授权IP> ...` 就能冒充授权来源，直接绕过共享访问密码，还能冒用别人的 IP
+登记占用方、抢占排队名额。所以第 2 条是必须的。
+
+* `USBIP_PROXY_SECRET` 由 `entrypoint.sh` 在容器启动时生成一个随机值并导出给
+  `web.py` 与 `gateway.py`（两个进程都从环境变量读，不需要额外配置）。
+  **它需要新的 `entrypoint.sh`**：只替换两个 `.py` 文件、没重建镜像时该变量为空，
+  这时会退回"只看回环"的旧行为，两个进程都会在日志里打 `WARNING` 提示。
+* 标记对不上时 `web.py` 会**一个字节都不消费**那行头，按直连处理（来源 = socket 对端），
+  并打印一行 `rejected a PROXY line without a valid USBIP_PROXY_SECRET token`。
+  所以正常请求不会被这行判断吃掉。
+* 校验标记不是密码：它只用来证明"这行头是网关写的"，不承担鉴权职责，也不落盘。
 
 关闭访问控制时**不补这行头**，所以默认路径上 HTTP 流量逐字节不变；网关是旧版、
 或 `web.py` 不认识这行头的老组合也不会出现（授权表是 `web.py` 自己写的，
 文件存在就说明它已经支持访问控制）。
+
+**其它边界**：`web.py` 只在"等这行头"时设一个短超时（`USBIP_PROXY_WAIT_SECONDS`，
+默认 2 秒），拿到或放弃后立刻恢复 15 秒的连接超时 —— 否则对端发 6 个字节 `PROXY `
+就不再说话时，这个连接会占着线程一直等到 15 秒。
 
 ### 管理接口
 
@@ -333,7 +361,7 @@ USB/IP 数据连接才被放行。
 | 授权按来源 IP 记账 | NAT / 多出口后多台机器共用一个源 IP，会共享同一份授权（一台授权=它们都能连）；反过来吊销也会一起被吊销。这是"USB/IP 协议没有认证"的必然取舍 |
 | 吊销不影响已建立的连接 | `gateway.py` 只在连接建立时判定一次，所以 `revoke` 之后已连上的 USB/IP 会话仍然保持，直到客户端自己断开；要立刻断开请用管理页「强制断开连接」 |
 | 容器重启后需重新授权 | 授权表默认在 `/run/usbip`（tmpfs），且启动时总会写成空表：重启/改密码都会清空所有授权，客户端需要重新输一次密码 |
-| 授权表损坏 = 全拒 | 网关读到损坏的授权表会拒绝一切 USB/IP 连接（宁可拒绝也不放行）。`web.py` 的写入是原子的，正常不会出现 |
+| 授权表损坏 = 全拒 | 网关读到损坏的授权表会拒绝一切 USB/IP 连接（宁可拒绝也不放行）。`web.py` 的写入是原子的，正常不会出现。**`web.py` 自己也 fail-closed**：授权表存在但读不出来时，`authorize` / `renew` / `revoke` 一律返回 `500` 且**不写盘**（绝不会把"读失败"当成"表是空的"，用一张只剩自己的表覆盖掉别人的授权）。恢复办法：修好或删掉授权表文件 |
 | `privileged: true` | 容器仍以特权运行（访问宿主内核 usbip 模块所需），未改 |
 | 心跳写放大 | 一次心跳可能触发多次全量 JSON 写 + fsync，未优化（启用访问控制后每次心跳还会多一次授权表写入） |
 | 占用方身份未认证 | `clientId` 只是客户端自称，无法证明"我就是上次那台机器"；占用显示、排队位置因此可被伪造（不影响设备释放） |
@@ -356,9 +384,10 @@ python tests/test_shutdown_no_kick.py  # 伪造 shutdown/陈旧 busids 不得触
 python tests/test_state_race.py        # clients.json / managed-busids 并发读写不丢更新（6 项）
 python tests/test_hidden_devices.py    # 隐藏设备：可见性、includeHidden、先停共享、409、硬件键跟随（55 项）
 python tests/test_netdev_guard.py      # 网卡保护：net/ 判据、share/kick 拒绝、逃生阀、networkInterfaces（40 项）
-python tests/test_access_gate.py       # 共享访问密码：向后兼容锚点、API 门、授权表、限速、吊销、网关判定（87 项）
+python tests/test_access_gate.py       # 共享访问密码：向后兼容锚点、API 门、授权表、限速、吊销、网关判定（90 项）
+python tests/test_access_boundary.py   # 访问控制信任边界：PROXY 行伪造、授权表损坏 fail-closed、网关缓存（38 项）
 sh     tests/test_entrypoint_netdev_guard.sh  # 入口脚本 bind_one 网卡拦截 + 默认路由判据（18 项）
-node   tests/test_ui_boot.js           # 管理页：直接抽取 index.html 的内联脚本跑（68 项）
+node   tests/test_ui_boot.js           # 管理页：直接抽取 index.html 的内联脚本跑（81 项）
 ```
 
 也可以用 `python -m unittest discover -s tests -p 'test_queue.py'` 只跑排队那一套。
