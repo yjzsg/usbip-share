@@ -21,8 +21,13 @@ fail() {
 : "${USBIP_WEB_ENABLED:=true}"
 : "${USBIP_WEB_HOST:=0.0.0.0}"
 : "${USBIP_WEB_PORT:=8080}"
+# 对外单端口网关的监听地址;默认 0.0.0.0 保持既有行为,可用环境变量收紧。
+: "${USBIP_GATEWAY_HOST:=0.0.0.0}"
 : "${USBIP_PIDFILE:=/run/usbip/usbipd.pid}"
 : "${USBIP_MANAGED_FILE:=/run/usbip/managed-busids}"
+# 共享访问密码的授权表:web.py 写,gateway.py 读。文件存在 = 已启用访问控制。
+# USBIP_ACCESS_PASSWORD 为空(默认)时 web.py 会删掉它,网关放行一切。
+: "${USBIP_ACCESS_FILE:=/run/usbip/authorized-clients.json}"
 
 case "$USBIP_PORT" in
     ''|*[!0-9]*) fail "USBIP_PORT must be a number: $USBIP_PORT" ;;
@@ -76,11 +81,43 @@ remember_managed() {
     fi
 }
 
+forget_managed() {
+    mkdir -p "$(dirname "$USBIP_MANAGED_FILE")"
+    [ -f "$USBIP_MANAGED_FILE" ] || return 0
+    grep -Fvx "$1" "$USBIP_MANAGED_FILE" > "$USBIP_MANAGED_FILE.new" 2>/dev/null || true
+    mv "$USBIP_MANAGED_FILE.new" "$USBIP_MANAGED_FILE" 2>/dev/null || true
+}
+
+# 共享一块承载宿主网络的 USB 网卡 = NAS 自己掉线(连远端 SSH 一起断,可能再也连不回来)。
+# 用接口目录下的 net/ 判断是不是网卡:设备类不可靠(RTL8156 报的是私有类 0xff)。
+# 只要有一个接口目录里存在 net/ 就拒绝;USBIP_ALLOW_NETDEV=true 才放行(危险开关)。
+exports_network_interface() {
+    [ -n "$(ls -d /sys/bus/usb/devices/"$1":*/net/* 2>/dev/null | head -n 1)" ]
+}
+
+netdev_guard_enabled() {
+    [ "${USBIP_ALLOW_NETDEV:-false}" != "true" ]
+}
+
+# 默认路由是否还在:driver 无关的兜底判据(容器里没有 ip 命令,/proc/net/route 可读)。
+default_route_present() {
+    awk 'NR > 1 && $2 == "00000000" { found = 1 } END { exit !found }' /proc/net/route 2>/dev/null
+}
+
+# 本轮真正 bind 成功的 busid;回滚只针对本轮动作,不会去动别人。
+ROUND_BOUND=""
+
 bind_one() {
     busid="$1"
     case "$busid" in
         ''|*[!A-Za-z0-9_.:-]*) fail "invalid USB bus ID: $busid" ;;
     esac
+
+    if netdev_guard_enabled && exports_network_interface "$busid"; then
+        # return 0: 一个坏条目不能让整个容器起不来,但也绝不 bind。
+        log "REFUSING to bind $busid: it exports a network interface; sharing it would drop the host off the network"
+        return 0
+    fi
 
     # A bound device appears as a symlink in the usbip-host driver directory.
     if [ -e "/sys/bus/usb/drivers/usbip-host/$busid" ]; then
@@ -91,13 +128,32 @@ bind_one() {
 
     log "binding USB device: $busid"
     usbip bind -b "$busid" || fail "cannot bind $busid; verify the bus ID and that no other driver owns it"
+    ROUND_BOUND="$ROUND_BOUND $busid"
     remember_managed "$busid"
 }
 
 # USBIP_BUSIDS is a comma-separated list, e.g. "1-1,1-2.3".
-for busid in $(printf '%s' "$USBIP_BUSIDS" | tr ',' ' '); do
-    bind_one "$busid"
-done
+if [ -n "$USBIP_BUSIDS" ]; then
+    route_before=false
+    if default_route_present; then
+        route_before=true
+    fi
+    for busid in $(printf '%s' "$USBIP_BUSIDS" | tr ',' ' '); do
+        bind_one "$busid"
+    done
+    # 兜底:网卡检测失效时(例如设备已被 usbip-host 绑着、net/ 已消失),
+    # 用"默认路由还在不在"判断刚才是不是把宿主的网络搞断了。
+    if [ "$route_before" = "true" ] && ! default_route_present; then
+        log "ERROR: 绑定设备后宿主默认路由消失，已回滚；请检查是不是共享了宿主在用的 USB 网卡"
+        for busid in $ROUND_BOUND; do
+            log "rolling back: unbinding $busid"
+            usbip unbind -b "$busid" >/dev/null 2>&1 || true
+            # 别再留在 managed 列表里让下一次重启又绑一遍。
+            forget_managed "$busid"
+        done
+        ROUND_BOUND=""
+    fi
+fi
 
 WEB_PID=""
 USBIPD_PID=""
@@ -160,6 +216,7 @@ if [ "$USBIP_WEB_ENABLED" = "true" ] || [ "$USBIP_WEB_ENABLED" = "1" ]; then
     log "starting Chinese management UI on TCP port $USBIP_WEB_PORT (internal)"
     USBIP_PORT="$USBIP_PORT" \
     USBIP_MANAGED_FILE="$USBIP_MANAGED_FILE" \
+    USBIP_ACCESS_FILE="$USBIP_ACCESS_FILE" \
     python3 /opt/usbip-share/web.py --host "$USBIP_WEB_HOST" --port "$USBIP_WEB_PORT" &
     WEB_PID=$!
     sleep 1
@@ -172,14 +229,19 @@ log "starting single-port gateway on TCP port $USBIP_PORT"
 USBIP_PORT="$USBIP_PORT" \
 USBIP_INNER_USBIPD_PORT="$USBIP_INNER_USBIPD_PORT" \
 USBIP_WEB_PORT="$USBIP_WEB_PORT" \
-    python3 /opt/usbip-share/gateway.py --host 0.0.0.0 --port "$USBIP_PORT" \
-        --usbip-port "$USBIP_INNER_USBIPD_PORT" --web-port "$USBIP_WEB_PORT" &
+USBIP_ACCESS_FILE="$USBIP_ACCESS_FILE" \
+    python3 /opt/usbip-share/gateway.py --host "$USBIP_GATEWAY_HOST" --port "$USBIP_PORT" \
+        --usbip-port "$USBIP_INNER_USBIPD_PORT" --web-port "$USBIP_WEB_PORT" \
+        --access-file "$USBIP_ACCESS_FILE" &
 GATEWAY_PID=$!
 sleep 1
 kill -0 "$GATEWAY_PID" 2>/dev/null || fail "single-port gateway did not start"
 
-if [ -n "$USBIP_BUSIDS" ]; then
-    log "USB/IP server is ready; initially exported bus IDs: $USBIP_BUSIDS"
+if [ -n "$ROUND_BOUND" ]; then
+    log "USB/IP server is ready; initially exported bus IDs:$ROUND_BOUND"
+elif [ -n "$USBIP_BUSIDS" ]; then
+    # 一条都没绑上:要么被网卡拦截挡了,要么本来就已经处于绑定状态。
+    log "USB/IP server is ready; USBIP_BUSIDS=$USBIP_BUSIDS produced no new exports (refused by the netdev guard or already bound)"
 else
     log "USB/IP server is ready; no devices are shared yet"
 fi

@@ -1,4 +1,4 @@
-import sys, tempfile, json, time
+import sys, tempfile, json, time, os
 from pathlib import Path
 
 # Import the server module straight from the repository root, and point every
@@ -10,6 +10,10 @@ import web  # noqa: E402
 base = Path(tempfile.mkdtemp())
 web.METADATA_FILE = base / "device-metadata.json"
 web.AUTH_FILE = base / "auth.json"
+# 出厂不再有固定默认密码：这里用 USBIP_WEB_PASSWORD 固定一个测试密码，
+# 下面的"登录态"场景再从环境变量里取回来。
+os.environ.setdefault("USBIP_WEB_PASSWORD", "test-password-123")
+TEST_PASSWORD = os.environ["USBIP_WEB_PASSWORD"]
 
 OK = []
 def check(name, cond, detail=""):
@@ -94,14 +98,15 @@ check("正常名字不受影响", web.device_metadata(d6, {"UK": 1}, 0, snap6)["
 
 print("[场景7] 登录态：容器重启不掉线 / 改密码即失效")
 web.load_auth()
-ok, token, must = web.verify_login("123456")
-check("默认密码可登录", ok and token.count(".") == 1, f"token={token[:18]}…")
+ok, token, must = web.verify_login(TEST_PASSWORD)
+check("环境变量密码可登录", ok and token.count(".") == 1, f"token={token[:18]}…")
 check("token 立即可用", web.valid_token(token))
 web.SESSIONS.clear()   # 模拟容器重启（内存态清空）
 check("模拟重启后 token 仍有效", web.valid_token(token))
 auth = json.loads(web.AUTH_FILE.read_text(encoding="utf-8"))
 auth["salt"] = "new-salt"
 auth["pwHash"] = web.hash_password("newpass", "new-salt")
+auth["mustChange"] = False
 web.AUTH_FILE.write_text(json.dumps(auth), encoding="utf-8")
 check("改密码后旧 token 立即失效", not web.valid_token(token))
 check("乱码 token 无效", not web.valid_token("garbage") and not web.valid_token(""))

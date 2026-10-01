@@ -25,6 +25,20 @@ services:
       USBIP_WEB_PORT: ${USBIP_WEB_PORT:-8080}
       # Set a non-empty token before exposing the management UI beyond localhost.
       USBIP_WEB_TOKEN: ${USBIP_WEB_TOKEN:-}
+      # Leave empty to let the container generate a random first-start password
+      # (written to ./config/initial-password.txt, must be changed on first
+      # login). Set it to manage the admin password from the environment.
+      USBIP_WEB_PASSWORD: ${USBIP_WEB_PASSWORD:-}
+      # 共享访问密码(访问控制)。留空 = 关闭,行为与旧版完全一致(默认)。
+      # 设置后:客户端必须先用密码调 /api/access/authorize 换取源 IP 授权,
+      # 之后它的 USB/IP 数据连接才会被网关放行(授权有效期见 TTL)。
+      USBIP_ACCESS_PASSWORD: ${USBIP_ACCESS_PASSWORD:-}
+      # 授权有效期(秒),默认 12 小时;客户端每拍心跳都会续期。
+      USBIP_ACCESS_TTL_SECONDS: ${USBIP_ACCESS_TTL_SECONDS:-43200}
+      # 授权表路径:web.py 写、gateway.py 读。文件存在 = 访问控制开启。
+      USBIP_ACCESS_FILE: ${USBIP_ACCESS_FILE:-/run/usbip/authorized-clients.json}
+      # Listen address of the single external port (USB/IP + management UI).
+      USBIP_GATEWAY_HOST: ${USBIP_GATEWAY_HOST:-0.0.0.0}
       USBIP_METADATA_FILE: ${USBIP_METADATA_FILE:-/etc/usbip/device-metadata.json}
       USBIP_CLIENTS_FILE: ${USBIP_CLIENTS_FILE:-/run/usbip/clients.json}
       # Release a shared device when its client stops heartbeating this long.
@@ -61,6 +75,9 @@ services:
       # registry accelerator answers 401).
       - ./web.py:/opt/usbip-share/web.py:ro
       - ./index.html:/opt/usbip-share/index.html:ro
+      # gateway.py 同理:共享访问密码要靠它拦住未授权的 USB/IP 连接,不 bind
+      # mount 的话改了 gateway.py 必须重建镜像才生效。
+      - ./gateway.py:/opt/usbip-share/gateway.py:ro
       # 与客户端 exe / 安装包同源的图标（浏览器标签页 + 页面 logo）。
       - ./favicon.ico:/opt/usbip-share/favicon.ico:ro
 

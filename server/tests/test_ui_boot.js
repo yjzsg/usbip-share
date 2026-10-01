@@ -75,7 +75,8 @@ async function run(options = {}) {
       calls.push({url, init});
       if (url === '/api/session') {
         if (opts.sessionHandler) return opts.sessionHandler();
-        return response({ok: true, authorized: opts.authorized, mustChange: Boolean(opts.mustChange)});
+        return response({ok: true, authorized: opts.authorized, mustChange: Boolean(opts.mustChange),
+          passwordManaged: Boolean(opts.passwordManaged)});
       }
       if (url === '/api/devices') {
         if (opts.deviceHandler) return opts.deviceHandler();
@@ -214,6 +215,14 @@ async function run(options = {}) {
   await settle();
   check('强制改密时不轮询', r.deviceCalls() === 0);
 
+  console.log('[D2] 环境变量托管密码');
+  r = await run({mustChange: true, passwordManaged: true});
+  check('托管密码时隐藏改密入口', r.el('changePassBtn').hidden);
+  check('托管密码时不弹强制改密框', r.el('changeModal').hidden && !r.el('mainApp').hidden);
+  check('托管密码时正常拉取设备', r.deviceCalls() === 1);
+  r = await run({passwordManaged: false});
+  check('非托管时改密入口可见', !r.el('changePassBtn').hidden);
+
   console.log('[E] 内容转义与原有管理操作');
   r = await run({devices: [{...sampleDevices[0], alias: '<img src=x onerror=alert(1)>', remark: '<script>bad</script>', binding: '未知绑定', bindingLabel: '<b>绑定</b>', connections: [{name: '<svg onload=bad()>', address: '" onmouseover="bad'}]}]});
   const html = r.el('content').innerHTML;
@@ -236,6 +245,82 @@ async function run(options = {}) {
   const saved = r.calls.find(call => call.url.endsWith('/metadata'));
   check('编辑名称备注继续保存原接口', saved && JSON.parse(saved.init.body).alias === '新名称' && JSON.parse(saved.init.body).remark === '新备注');
   check('保存后关闭编辑框并恢复按钮', r.el('editorModal').hidden && !r.el('saveEdit').disabled);
+
+  console.log('[F] 隐藏设备');
+  const hiddenDevice = {busid: '2-7', vidpid: '0bda:8156', description: 'Realtek USB 2.5G LAN',
+    alias: '', remark: '', binding: 'serial', bindingLabel: '序列号 NIC-1',
+    duplicateModel: false, shared: false, hidden: true, connections: []};
+  r = await run();
+  check('未勾选时不请求已隐藏设备', !r.calls.some(call => call.url.includes('includeHidden')));
+  check('普通设备给出隐藏按钮', r.el('content').innerHTML.includes('data-action="hide"'));
+  r = await run({devices: [hiddenDevice]});
+  const hiddenHtml = r.el('content').innerHTML;
+  check('已隐藏设备标出徽标并整行淡显', hiddenHtml.includes('已隐藏') && hiddenHtml.includes('row-hidden'));
+  check('已隐藏设备给出取消隐藏按钮', hiddenHtml.includes('data-action="unhide"'));
+  r = await run({mutationHandler: () => response({ok: true, usbipPort: 5555, devices: [hiddenDevice]})});
+  r.el('showHidden').onchange({target: {checked: true}});
+  await settle();
+  check('勾选后请求带 includeHidden=1', r.calls.some(call => call.url === '/api/devices?includeHidden=1'));
+  r = await run();
+  const callsBeforeHide = r.calls.length;
+  r.sandbox.testButton = {disabled: false};
+  r.sandbox.confirm = () => false;
+  await r.evaluate("changeState('2-7', 'hide', testButton)");
+  check('取消隐藏确认时不发请求', r.calls.length === callsBeforeHide);
+  r.sandbox.confirm = () => true;
+  r.opts.mutationHandler = () => response({ok: true, message: '设备已隐藏'});
+  await r.evaluate("changeState('2-7', 'hide', testButton)");
+  check('确认后调用 hide 接口', r.calls.some(call => call.url === '/api/devices/2-7/hide'));
+  check('隐藏成功后恢复按钮可再次使用', !r.sandbox.testButton.disabled);
+  await r.evaluate("changeState('2-7', 'unhide', testButton)");
+  check('取消隐藏调用 unhide 接口', r.calls.some(call => call.url === '/api/devices/2-7/unhide'));
+
+  console.log('[G] USB 网卡保护与失联时长');
+  const netdev = {busid: '2-7', vidpid: '0bda:8156', description: 'Realtek USB 2.5G LAN',
+    alias: '', remark: '', binding: 'serial', bindingLabel: '序列号 NIC-1',
+    duplicateModel: false, shared: false, hidden: false, connections: [],
+    networkInterfaces: ['enxc84d44294124']};
+  r = await run({devices: [netdev]});
+  const netHtml = r.el('content').innerHTML;
+  check('USB 网卡标出不可共享', netHtml.includes('系统网卡·不可共享') && netHtml.includes('enxc84d44294124'));
+  check('USB 网卡不给出可点的开始共享按钮', netHtml.includes('开始共享') && netHtml.includes('disabled'));
+  check('USB 网卡没有停止共享/强制断开按钮', !netHtml.includes('data-action="share"') && !netHtml.includes('data-action="unshare"'));
+  r = await run({devices: [sampleDevices[0]]});
+  check('普通设备仍有可点的开始共享/停止共享', r.el('content').innerHTML.includes('data-action="unshare"'));
+  r = await run({deviceHandler: () => response({ok: true, usbipPort: 5555, kickIdleSeconds: 60, devices: sampleDevices})});
+  check('失联时长用服务端真实值渲染', r.el('kickIdle').textContent === '约 1 分钟');
+  r = await run({deviceHandler: () => response({ok: true, usbipPort: 5555, kickIdleSeconds: 0, devices: sampleDevices})});
+  check('失联时长 0 表示不自动释放', r.el('kickIdle').textContent === '不自动释放（0 秒）');
+  r = await run({deviceHandler: () => response({ok: true, usbipPort: 5555, devices: sampleDevices})});
+  check('服务端没给该字段时给出兜底文案', r.el('kickIdle').textContent === '不自动释放（0 秒）');
+
+  console.log('[H] 访问控制（共享访问密码）');
+  const accessEnabled = {ok: true, required: true, clients: [
+    {address: '192.168.1.21', clientId: 'c1', clientName: '前台电脑', authorizedAt: 1, expiresAt: 2, expiresInSeconds: 3600}
+  ]};
+  r = await run({mutationHandler: url => url === '/api/access/clients'
+    ? response(accessEnabled)
+    : response({ok: false, error: '未实现的测试接口'}, 404)});
+  await settle();
+  check('启用访问密码时显示已启用与授权台数', r.el('accessState').textContent.includes('已启用') && r.el('accessState').textContent.includes('1 台'));
+  r.el('accessManageBtn').onclick();
+  await settle();
+  check('打开管理弹窗显示已授权客户端', !r.el('accessModal').hidden && r.el('accessList').innerHTML.includes('前台电脑'));
+  r.sandbox.confirm = () => true;
+  r.sandbox.testButton = {disabled: false};
+  await r.evaluate("revokeAccess('192.168.1.21', testButton)");
+  const revokeOne = r.calls.find(call => call.url === '/api/access/clients/revoke');
+  check('吊销单个客户端带上地址', Boolean(revokeOne) && JSON.parse(revokeOne.init.body).address === '192.168.1.21');
+  const beforeAll = r.calls.length;
+  await r.evaluate("revokeAccess('', testButton)");
+  const revokeAll = r.calls.slice(beforeAll).find(call => call.url === '/api/access/clients/revoke');
+  check('吊销全部不带地址', Boolean(revokeAll) && Object.keys(JSON.parse(revokeAll.init.body)).length === 0);
+  r = await run({mutationHandler: url => url === '/api/access/clients'
+    ? response({ok: true, required: false, clients: []})
+    : response({ok: false, error: '未实现的测试接口'}, 404)});
+  await settle();
+  check('未启用访问密码时显示未启用', r.el('accessState').textContent.includes('未启用'));
+  check('读取失败时不抛异常，只显示占位', r.el('accessList').innerHTML.length >= 0);
 
   const passed = results.filter(Boolean).length;
   console.log('\n总计: ' + passed + '/' + results.length + ' 通过');

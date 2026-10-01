@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>USB-SHARE 设备共享</title>
-  <link rel="icon" href="/favicon.ico" type="image/x-icon">
-  <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
   <style>
     :root {
       color-scheme: light;
@@ -30,7 +30,7 @@
       color: var(--text);
       font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
     }
-    .wrap { max-width: 1400px; margin: 0 auto; padding: 28px 18px 48px; }
+    .wrap { max-width: 1560px; margin: 0 auto; padding: 28px 18px 48px; }
     .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
     .brand { display: flex; align-items: center; gap: 12px; }
     .logo { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; color: #fff; background: linear-gradient(135deg, #24304f, #16203a); font-size: 10px; font-weight: 700; letter-spacing: .2px; box-shadow: 0 6px 14px rgba(22, 32, 58, .3); }
@@ -52,11 +52,23 @@
     .primary { background: var(--brand); color: #fff; }
     .primary:hover { background: var(--brand-dark); }
     .secondary { background: #edf3ff; color: var(--brand-dark); }
+    /* 被隐藏的设备：默认不出现在列表里，勾选「显示出来」后才以淡色显示。 */
+    .hidden-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; padding: 8px 0; }
+    tr.row-hidden td { opacity: .55; }
+    .badge.hidden-badge { background: #f1f3f7; color: #6b7280; }
+    .badge.net-badge { color: #b54708; background: #fff4e5; }
     .danger { background: var(--red-bg); color: var(--red); }
     .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; min-width: 1460px; }
-    th, td { padding: 13px 15px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    /* min-width 必须小于 .wrap 的 max-width，否则表格一定横向溢出、最右边的
+       「操作」列会被裁掉（之前是 1460 > 1400）。这里按"最窄也要能看"来定，
+       真正的兜底是下面把操作列钉在右侧。 */
+    table { width: 100%; border-collapse: collapse; min-width: 900px; }
+    th, td { padding: 12px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; background: #fbfcfe; font-size: 13px; }
+    /* 操作列固定在右侧：窗口再窄，按钮也不会被裁到看不见。 */
+    th:last-child, td:last-child { position: sticky; right: 0; background: var(--card); }
+    th:last-child { background: #fbfcfe; }
+    th:last-child::before, td:last-child::before { content: ''; position: absolute; top: 0; bottom: 0; left: -10px; width: 10px; pointer-events: none; background: linear-gradient(to right, rgba(28, 45, 75, 0), rgba(28, 45, 75, .07)); }
     tr:last-child td { border-bottom: 0; }
     .device-name { font-weight: 600; max-width: 260px; word-break: break-word; }
     .device-sub { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
@@ -75,10 +87,18 @@
     .owner { max-width: 210px; word-break: break-word; }
     .owner strong { display: block; }
     .owner small { color: var(--muted); }
-    .actions { display: flex; gap: 7px; flex-wrap: wrap; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .actions button { padding: 7px 10px; font-size: 13px; }
     .empty, .error { padding: 42px 18px; text-align: center; color: var(--muted); }
     .error { color: var(--red); }
     .bottom { margin-top: 16px; color: var(--muted); font-size: 12px; }
+    .bottom p { margin: 0 0 6px; }
+    .bottom .more { margin-top: 4px; }
+    .bottom .more summary { cursor: pointer; color: var(--brand-dark); }
+    .bottom .more p { margin: 6px 0 0; }
+    .access-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+    .access-row:last-child { border-bottom: 0; }
+    .access-row small { display: block; color: var(--muted); font-size: 12px; }
     .modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: rgba(15, 23, 42, .45); }
     .modal[hidden] { display: none; }
     .center-card { width: min(430px, 100%); padding: 26px; text-align: center; }
@@ -103,6 +123,9 @@
     .filter-field { flex: 0 0 150px; }
     .filters label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
     .filters input, .filters select { width: 100%; min-height: 39px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--card); color: var(--text); font: inherit; }
+    /* 复选框不是输入框：上面那条 width:100% / min-height 会把它撑成一个大方块。 */
+    .filters input[type="checkbox"] { width: auto; min-height: 0; height: 16px; padding: 0; margin: 0 6px 0 0; vertical-align: -2px; accent-color: var(--brand); }
+    .hidden-toggle { display: inline-flex; align-items: center; font-size: 13px; cursor: pointer; min-height: 39px; }
     .auto-refresh { margin-left: auto; padding-bottom: 9px; color: var(--muted); font-size: 12px; white-space: nowrap; }
     .error-banner { margin-bottom: 18px; padding: 12px 16px; display: flex; gap: 16px; align-items: center; justify-content: space-between; color: var(--red); border-color: #f4c4be; }
     .feedback { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 32px); padding: 12px 20px; border-radius: 10px; color: white; background: var(--text); box-shadow: var(--shadow); }
@@ -127,14 +150,16 @@
   <main class="wrap" id="mainApp" hidden>
     <header class="top">
       <div class="brand">
-        <div class="logo" aria-hidden="true"><img src="/favicon.ico" alt=""></div>
+        <div class="logo" aria-hidden="true"><img src="favicon.ico" alt=""></div>
         <div>
           <h1>USB-SHARE 设备共享</h1>
           <p class="subtitle">USB-SHARE 服务端管理</p>
         </div>
       </div>
       <div>
-        <button class="secondary" id="changePassBtn">修改密码</button>
+        <!-- 密码由 USBIP_WEB_PASSWORD 环境变量托管时（飞牛应用的默认形态），
+             这一项由 applyPasswordManaged() 保持隐藏：页面上改不了，就别给入口。 -->
+        <button class="secondary" id="changePassBtn" hidden>修改密码</button>
         <button class="secondary" id="logoutBtn">退出登录</button>
         <button class="primary" id="refreshTop">刷新设备</button>
       </div>
@@ -182,6 +207,10 @@
             <option value="connected">已登记连接</option>
           </select>
         </div>
+        <div class="filter-field">
+          <label for="showHidden">已隐藏的设备</label>
+          <label class="hidden-toggle"><input id="showHidden" type="checkbox"> 显示出来</label>
+        </div>
         <button id="clearFilters" class="secondary" hidden>清除筛选</button>
         <span class="auto-refresh">每 10 秒自动更新 · 编辑时暂停</span>
       </div>
@@ -190,7 +219,25 @@
       </div>
     </section>
 
-    <p class="bottom">设备名称和备注保存在 NAS 配置目录；连接方来自 Windows 中文客户端的在线登记。客户端停止心跳超过约 45 秒后会自动消失。管理员可用“强制断开连接”从服务器踢掉当前远程客户端，设备仍保持共享。<br>被别的客户端占用的设备同样会列在这里，并用“排队等待”显示谁在等、排在第几位；客户端点击该设备即会加入队列，等当前连接方释放后自动接手。</p>
+    <section class="card" id="accessCard">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <strong>访问控制</strong>
+          <span class="count" id="accessState">正在读取…</span>
+        </div>
+        <button class="secondary" id="accessManageBtn">管理已授权客户端</button>
+      </div>
+    </section>
+
+    <div class="bottom">
+      <p>连接方来自 Windows 客户端的在线登记；停止心跳超过 <strong id="kickIdle">—</strong> 后自动释放其设备并移出列表（在「应用设置」里改，0 = 不自动释放）。</p>
+      <details class="more">
+        <summary>更多说明</summary>
+        <p>设备名称和备注保存在 NAS 配置目录。「强制断开」会从服务器踢掉当前远程客户端，设备仍保持共享；被占用的设备同样列在这里，用「排队」显示谁在等、排在第几位，客户端点击该设备即加入队列，等对方释放后自动接手。</p>
+        <p>导出网络接口的 USB 设备（USB 网卡）标为「系统网卡·不可共享」：共享它会让飞牛自己掉线，服务端会直接拒绝。「隐藏」用于把不想看到的设备从列表和 Windows 客户端里藏起来，勾选上方的「已隐藏的设备」可以取消隐藏。</p>
+        <p>启用了「共享访问密码」时，客户端必须先用它换取授权才能连上 USB/IP 数据端口；上面那一栏能看到并吊销已授权的客户端。密码本身在「应用设置」里改（Docker 部署改 <code>.env</code> 的 <code>USBIP_ACCESS_PASSWORD</code>）。</p>
+      </details>
+    </div>
   </main>
 
   <div class="modal" id="loginModal" hidden>
@@ -199,10 +246,10 @@
       <p>请输入管理密码登录</p>
       <div class="field">
         <label for="loginPass">管理密码</label>
-        <input id="loginPass" type="password" autocomplete="current-password" placeholder="默认 123456">
+        <input id="loginPass" type="password" autocomplete="current-password" placeholder="请输入管理密码">
       </div>
       <button class="primary" id="loginBtn" style="width:100%">登录</button>
-      <p class="muted" style="margin-top:14px;font-size:12px">首次登录后必须修改默认密码</p>
+      <p class="muted" style="margin-top:14px;font-size:12px">密码由服务端环境变量托管时（飞牛应用的默认形态），改密入口会隐藏，请到「应用设置」里修改；否则首次启动的随机密码见容器日志或配置目录下的 initial-password.txt，登录后需立即修改</p>
     </section>
   </div>
 
@@ -244,6 +291,18 @@
     </section>
   </div>
 
+  <div class="modal" id="accessModal" hidden>
+    <section class="card editor" role="dialog" aria-modal="true" aria-labelledby="accessTitle">
+      <h2 id="accessTitle">已授权的客户端</h2>
+      <p class="muted" id="accessHint">—</p>
+      <div id="accessList"></div>
+      <div class="editor-actions">
+        <button class="secondary" id="accessRevokeAll">吊销全部</button>
+        <button class="primary" id="accessClose">关闭</button>
+      </div>
+    </section>
+  </div>
+
   <script>
     const TOKEN_KEY = 'usbip-share-token';
     // 项目改名前的旧键名，仅用于一次性迁移；迁移完即删除。
@@ -252,6 +311,36 @@
     if (token) localStorage.setItem(TOKEN_KEY, token);
     localStorage.removeItem(LEGACY_TOKEN_KEY);
     let mustChange = false;
+    // true = 密码由服务端 USBIP_WEB_PASSWORD 托管：页面隐藏「修改密码」入口，
+    // 也不再强制弹改密框（在页面上改了下次重启也会被环境变量覆盖）。
+    let passwordManaged = false;
+    // true = 列表里连「已隐藏的设备」一起显示（服务端只在带管理员令牌 +
+    // includeHidden=1 时才返回它们）。隐藏是给 USB 网卡这类"绝对不能被共享"
+    // 的设备准备的：默认从列表里消失，Windows 客户端也看不到，也就点不到。
+    let showHidden = false;
+
+    /*
+     * 这个页面有两种访问方式：
+     *   1. 直连服务端口：http://NAS:端口/              前缀为空
+     *   2. 飞牛统一网关（桌面小窗）：/app/usbip-share/  前缀非空
+     * 下面的 /api/* 都是根路径写法，走网关时会打到 NAS 域名的 /api 上而不是本应用。
+     * 这里按当前路径算出挂载前缀并统一补上，避免改每一处 fetch。
+     * 前缀本身来自飞牛入口配置里的 gatewayPrefix，改 appname 时这里要一起改。
+     */
+    const GATEWAY_PREFIX = (() => {
+      const marker = '/app/usbip-share';
+      const path = window.location.pathname || '/';
+      return (path === marker || path.startsWith(marker + '/')) ? marker : '';
+    })();
+    if (GATEWAY_PREFIX) {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (typeof input === 'string' && input.startsWith('/api/')) {
+          return nativeFetch(GATEWAY_PREFIX + input, init);
+        }
+        return nativeFetch(input, init);
+      };
+    }
 
     const mainApp = document.getElementById('mainApp');
     const loginModal = document.getElementById('loginModal');
@@ -277,6 +366,11 @@
     document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
     document.getElementById('changeBtn').onclick = doChange;
     document.getElementById('changePassBtn').onclick = () => showChange();
+    document.getElementById('showHidden').onchange = event => {
+      showHidden = event.target.checked;
+      renderedHtml = '';
+      loadDevices({force: true});
+    };
     document.getElementById('logoutBtn').onclick = () => {
       token = ''; localStorage.removeItem(TOKEN_KEY);
       window.location.reload();
@@ -331,7 +425,13 @@
       loginModal.hidden = false;
       document.getElementById('loginPass').focus();
     }
+    function applyPasswordManaged() {
+      document.getElementById('changePassBtn').hidden = passwordManaged;
+      // 托管时连弹窗一起收掉，避免任何路径（例如 mustChange 竞态）把它弹出来。
+      if (passwordManaged) changeModal.hidden = true;
+    }
     function showChange(force) {
+      if (passwordManaged) return;
       changeModal.hidden = false;
       if (force) document.getElementById('changeHint').textContent = '出于安全要求，请先修改默认密码后再使用。';
       else document.getElementById('changeHint').textContent = '修改后需要重新登录。';
@@ -349,12 +449,15 @@
         sessionReady = true;
         setError('');
         mustChange = Boolean(data.mustChange);
+        passwordManaged = Boolean(data.passwordManaged);
+        applyPasswordManaged();
         localStorage.setItem(TOKEN_KEY, token);
         loginModal.hidden = true;
         mainApp.hidden = false;
         document.getElementById('loginPass').value = '';
-        if (mustChange) showChange(true);
+        if (mustChange && !passwordManaged) showChange(true);
         await loadDevices();
+        await refreshAccess();
       } catch (error) {
         alert(error.message);
       } finally {
@@ -395,13 +498,14 @@
       refreshButton.textContent = '正在刷新…';
       const requestToken = token;
       try {
-        const response = await fetch('/api/devices', {cache: 'no-store', headers: apiHeaders()});
+        const response = await fetch('/api/devices' + (showHidden ? '?includeHidden=1' : ''), {cache: 'no-store', headers: apiHeaders()});
         if (requestToken !== token) return;
         if (response.status === 401) { expireSession(); return; }
         const data = await response.json();
         if (requestToken !== token) return;
         if (!response.ok || !data.ok || !Array.isArray(data.devices)) throw new Error(data.error || '读取设备失败');
         document.getElementById('port').textContent = data.usbipPort;
+        document.getElementById('kickIdle').textContent = formatKickIdle(data.kickIdleSeconds);
         currentDevices = data.devices;
         hasDevices = true;
         renderDevices(currentDevices);
@@ -424,6 +528,85 @@
         }
       }
     }
+    // 失联释放时长由服务端给（应用设置里的 kick_idle_seconds），页面不再写死数字。
+    function formatKickIdle(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value <= 0) return '不自动释放（0 秒）';
+      if (value < 60) return `约 ${value} 秒`;
+      const minutes = value / 60;
+      return `约 ${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} 分钟`;
+    }
+    // ---- 访问控制（共享访问密码）----
+    // 服务端启用了 USBIP_ACCESS_PASSWORD 时，Windows 客户端必须先用它换取授权，
+    // 之后它发起的 USB/IP 数据连接才会被单端口网关放行。这一栏只做展示与吊销。
+    const accessModal = document.getElementById('accessModal');
+    const accessList = document.getElementById('accessList');
+    function formatAccessExpiry(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value) || value <= 0) return '已过期';
+      if (value < 3600) return `${Math.ceil(value / 60)} 分钟后`;
+      return `${(value / 3600).toFixed(1)} 小时后`;
+    }
+    function renderAccess(data) {
+      const clients = Array.isArray(data.clients) ? data.clients : [];
+      document.getElementById('accessState').textContent = data.required
+        ? `已启用 · ${clients.length} 台客户端已授权`
+        : '未启用（客户端可直接连接）';
+      if (!clients.length) {
+        accessList.innerHTML = `<div class="empty">${data.required ? '当前没有已授权的客户端。' : '未启用访问密码，所以没有授权记录。'}</div>`;
+        return;
+      }
+      accessList.innerHTML = clients.map(item => `
+        <div class="access-row">
+          <div>
+            <strong>${escapeHtml(item.clientName || '未命名客户端')}</strong>
+            <small>${escapeHtml(item.address || '地址未知')} · 到期 ${escapeHtml(formatAccessExpiry(item.expiresInSeconds))}</small>
+          </div>
+          <button class="danger" data-revoke="${escapeHtml(item.address || '')}">吊销</button>
+        </div>`).join('');
+      accessList.querySelectorAll('button[data-revoke]').forEach(button => {
+        button.onclick = () => revokeAccess(button.dataset.revoke, button);
+      });
+    }
+    async function refreshAccess() {
+      try {
+        const response = await fetch('/api/access/clients', {cache: 'no-store', headers: apiHeaders()});
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || '暂时无法读取访问控制状态');
+        renderAccess(data);
+      } catch (error) {
+        document.getElementById('accessState').textContent = '暂时无法读取';
+        accessList.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+    async function revokeAccess(address, button) {
+      const question = address
+        ? `确定吊销 ${address} 的访问授权吗？它需要重新输入访问密码才能连接。`
+        : '确定吊销全部已授权客户端吗？它们都需要重新输入访问密码。';
+      if (!window.confirm(question)) return;
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/access/clients/revoke', {
+          method: 'POST', headers: jsonHeaders(), body: JSON.stringify(address ? {address} : {})
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || '吊销失败');
+        flash(data.message || '已吊销');
+        renderAccess(data);
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+    document.getElementById('accessManageBtn').onclick = () => {
+      accessModal.hidden = false;
+      refreshAccess();
+    };
+    document.getElementById('accessClose').onclick = () => { accessModal.hidden = true; };
+    document.getElementById('accessRevokeAll').onclick = () =>
+      revokeAccess('', document.getElementById('accessRevokeAll'));
+
     function connectionSummary(connections) {
       if (!connections || !connections.length) return '<span class="muted">未登记连接方</span>';
       return connections.map(connection => {
@@ -435,18 +618,18 @@
         return `<div class="owner"><strong>${name}</strong><small>${address}</small>${ipLine}</div>`;
       }).join('');
     }
-    // 等待名单:被别的客户端占用的设备也能被所有人看到,并且明确标出谁在排队、
-    // 排在第几位。第一行就是设备一空下来会立刻被唤醒的那一位。
+    // 等待名单并进「占用与排队」一列：单独占一列时几乎永远是空的，白占宽度。
+    // 第一行就是设备一空下来会立刻被唤醒的那一位。
     function queueSummary(pending) {
-      if (!pending || !pending.length) return '<span class="muted">—</span>';
-      return pending.map((entry, index) => {
+      if (!pending || !pending.length) return '';
+      const names = pending.map((entry, index) => {
         const name = escapeHtml(entry.name || '未命名客户端');
-        const tag = index === 0 ? '下一位' : `第 ${index + 1} 位`;
-        return `<div class="owner"><strong>${name}</strong><small>${tag}</small></div>`;
-      }).join('');
+        return index === 0 ? `${name}（下一位）` : `${name}（第 ${index + 1} 位）`;
+      }).join('、');
+      return `<div class="device-sub">排队：${names}</div>`;
     }
     function renderDevices(devices) {
-      if (!editorModal.hidden || !changeModal.hidden || !hasDevices) return;
+      if (!editorModal.hidden || !changeModal.hidden || !accessModal.hidden || !hasDevices) return;
       const connectedCount = devices.filter(device => device.connections && device.connections.length).length;
       document.getElementById('totalCount').textContent = devices.length;
       document.getElementById('sharedCount').textContent = devices.filter(device => device.shared).length;
@@ -473,12 +656,29 @@
       }
       const rows = visibleDevices.map(device => {
         const shared = Boolean(device.shared);
-        const kick = shared
-          ? `<button class="danger" data-action="kick" data-busid="${escapeHtml(device.busid)}">强制断开连接</button>`
+        const hidden = Boolean(device.hidden);
+        const busidAttr = escapeHtml(device.busid);
+        // 导出网络接口的设备 = USB 网卡。共享它会把宿主自己的网卡绑走 → NAS 掉线，
+        // 所以服务端会拒绝，这里也不再给可点的按钮（避免用户以为点了有用）。
+        const netIfaces = Array.isArray(device.networkInterfaces) ? device.networkInterfaces : [];
+        const isNetdev = netIfaces.length > 0;
+        const netHint = isNetdev
+          ? `这块设备导出了网络接口（${netIfaces.join('、')}），共享它会让飞牛自己掉线，服务端已禁止共享`
           : '';
-        const action = shared
-          ? `<button class="danger" data-action="unshare" data-busid="${escapeHtml(device.busid)}">停止共享</button>${kick}`
-          : `<button class="primary" data-action="share" data-busid="${escapeHtml(device.busid)}">开始共享</button>`;
+        const kick = shared
+          ? `<button class="danger" data-action="kick" data-busid="${busidAttr}">强制断开</button>`
+          : '';
+        let action;
+        if (isNetdev) {
+          action = `<button class="secondary" disabled title="${escapeHtml(netHint)}">开始共享</button>`;
+        } else if (shared) {
+          action = `<button class="danger" data-action="unshare" data-busid="${busidAttr}">停止共享</button>${kick}`;
+        } else {
+          action = `<button class="primary" data-action="share" data-busid="${busidAttr}">开始共享</button>`;
+        }
+        const hideButton = hidden
+          ? `<button class="secondary" data-action="unhide" data-busid="${busidAttr}">取消隐藏</button>`
+          : `<button class="secondary" data-action="hide" data-busid="${busidAttr}">隐藏</button>`;
         const alias = device.alias ? `<div class="device-name">${escapeHtml(device.alias)}</div><div class="device-sub">系统名称：${escapeHtml(device.description || '未知')}</div>`
           : `<div class="device-name">${escapeHtml(device.description || '未知 USB 设备')}</div>`;
         // 文案由服务端给出（含真实序号），这里只负责配色；未知取值回退到“未设置”。
@@ -492,18 +692,16 @@
         const dupHint = device.duplicateModel
           ? '<div class="device-sub warn-text">同型号多台且无序列号，无法区分个体</div>'
           : '';
-        return `<tr>
-          <td>${alias}<div class="device-sub">VID/PID：${escapeHtml(device.vidpid)}</div>${dupHint}</td>
-          <td class="remark">${device.remark ? escapeHtml(device.remark) : '<span class="muted">未设置</span>'}</td>
+        return `<tr class="${hidden ? 'row-hidden' : ''}">
+          <td>${alias}<div class="device-sub">VID/PID：${escapeHtml(device.vidpid)}</div>${device.remark ? `<div class="device-sub">备注：${escapeHtml(device.remark)}</div>` : ''}${dupHint}${isNetdev ? `<div class="device-sub warn-text">网络接口：${escapeHtml(netIfaces.join('、'))}</div>` : ''}</td>
           <td><code>${escapeHtml(device.busid)}</code></td>
           <td>${bindBadge}</td>
-          <td>${connectionSummary(device.connections)}</td>
-          <td>${queueSummary(device.pendingQueue)}</td>
-          <td><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span></td>
-          <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${escapeHtml(device.busid)}">编辑名称/备注</button>${action}</div></td>
+          <td>${connectionSummary(device.connections)}${queueSummary(device.pendingQueue)}</td>
+          <td><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span>${isNetdev ? '<span class="badge net-badge">系统网卡·不可共享</span>' : ''}${hidden ? '<span class="badge hidden-badge">已隐藏</span>' : ''}</td>
+          <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${busidAttr}">编辑名称</button>${action}${hideButton}</div></td>
         </tr>`;
       }).join('');
-      const html = `<table><thead><tr><th>设备（显示名称）</th><th>设备备注</th><th>Bus ID</th><th>名称绑定依据</th><th>当前连接方</th><th>排队等待</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const html = `<table><thead><tr><th>设备（显示名称）</th><th>Bus ID</th><th>名称绑定依据</th><th>占用与排队</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;
       // 心跳时间戳不参与页面内容比较，未变化时不替换表格，保留焦点和滚动位置。
       if (renderedHtml === html) return;
       const scrollLeft = content.scrollLeft;
@@ -555,6 +753,7 @@
     }
     async function changeState(busid, action, button) {
       if (action === 'kick' && !window.confirm('确定要从服务器强制断开此设备的远程客户端吗？设备会继续保持共享，设置了自动重连的客户端可能再次连接。')) return;
+      if (action === 'hide' && !window.confirm('隐藏后该设备不会再出现在设备列表和 Windows 客户端里，也无法被共享。如果它正在共享，会先停止共享。\n\n适合用来保护 NAS 自带的 USB 网卡这类不能外放的设备。确定隐藏吗？')) return;
       button.disabled = true;
       try {
         const response = await fetch(`/api/devices/${encodeURIComponent(busid)}/${action}`, {
@@ -585,11 +784,14 @@
         if (!data.authorized) { expireSession(); return; }
         sessionReady = true;
         mustChange = Boolean(data.mustChange);
+        passwordManaged = Boolean(data.passwordManaged);
+        applyPasswordManaged();
         loginModal.hidden = true;
         mainApp.hidden = false;
         setError('');
-        if (mustChange) showChange(true);
+        if (mustChange && !passwordManaged) showChange(true);
         await loadDevices();
+        await refreshAccess();
       } catch (error) {
         if (requestToken !== token) return;
         // 断网、服务端错误或响应损坏不代表令牌失效；保留令牌等待重试。

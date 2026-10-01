@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import tempfile
 import threading
@@ -17,7 +18,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 BUS_RE = re.compile(r"^\s*-\s+busid\s+(\S+)\s+\(([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\)\s*$")
 SAFE_BUSID_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
@@ -37,6 +38,23 @@ QUEUE_FILE = Path(os.environ.get("USBIP_QUEUE_FILE", "/run/usbip/queue.json"))
 # that client surfaces it and clears the slot. Persisted across restarts so a
 # transport hiccup does not lose the trigger.
 NOTIFY_FILE = Path(os.environ.get("USBIP_NOTIFY_FILE", "/run/usbip/queue-notify.json"))
+# 共享访问密码(访问控制)。空/未设 = 关闭访问控制,行为与旧版完全一致(默认)。
+# 非空 = 客户端必须先用密码调 POST /api/access/authorize 换取"源 IP 授权",
+# 之后它发起的 USB/IP 数据连接才会被 gateway.py 放行(USB/IP 协议本身没有认证,
+# 所以授权单位是"来源 IP + 有效期",不是协议里的身份)。
+ACCESS_TTL_DEFAULT_SECONDS = 43200  # 12 小时;每次心跳续期
+ACCESS_TTL_MIN_SECONDS = 60
+# 授权表:web.py 原子写,gateway.py 只读(带 mtime 缓存)。
+# **文件存在 = 访问控制开启**;文件不存在 = 放行一切 —— 这就是网关判断开关的方式,
+# 也是"没设密码时行为完全不变"的实现基础。
+ACCESS_FILE = Path(os.environ.get("USBIP_ACCESS_FILE", "/run/usbip/authorized-clients.json"))
+_ACCESS_LOCK = threading.RLock()
+# USB sysfs root. Module-level so tests can point it at a fixture tree.
+SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
+# Interface directories of a device are named "<busid>:<config>.<interface>"
+# (e.g. "2-7:1.0"). The template is a constant so the fixture tree can use a
+# different separator on hosts whose filesystem forbids ":" in file names.
+USB_INTERFACE_DIR_GLOB = "{busid}:*"
 MAX_QUEUE_PER_BUSID = 16
 MAX_NOTIFY_PER_CLIENT = 32
 KICK_IDLE_SECONDS = int(os.environ.get("USBIP_KICK_IDLE_SECONDS", "60") or 60)
@@ -75,10 +93,33 @@ WATCHDOG_LOCK = threading.Lock()
 _QUEUE_NOTIFIED: dict[str, str] = {}
 
 AUTH_FILE = Path(os.environ.get("USBIP_AUTH_FILE", "/etc/usbip/auth.json"))
-DEFAULT_PASSWORD = "123456"
+# 出厂不再有"众所周知的默认密码":未设置 USBIP_WEB_PASSWORD 时,首次启动会生成一个
+# 12 位随机密码,写入 <配置目录>/initial-password.txt(0600)并在日志醒目打印,
+# 同时 mustChange=true 强制管理员登录后立刻改掉它。
+INITIAL_PASSWORD_LENGTH = 12
+# 去掉易混淆的 0/O/1/l/I,方便管理员从日志或文件里人工抄录。
+PASSWORD_ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 SESSION_TTL_SECONDS = 7 * 24 * 3600
 SESSIONS: dict[str, float] = {}
 SESSION_LOCK = threading.Lock()
+# 已经按当前 USBIP_WEB_PASSWORD 同步过 auth.json 的值。load_auth() 在每一次鉴权请求
+# 上都会被调用,而 PBKDF2 派生不便宜,所以每个进程只允许同步一次(或 env 值变化时)。
+_ENV_PASSWORD_APPLIED: str | None = None
+# 只在"冷启动创建 auth.json"时使用,保证不会有两个请求各自生成一个随机密码。
+AUTH_LOCK = threading.Lock()
+
+# 登录/改密限速:按来源 IP 的滑动窗口。连续 AUTH_GUARD_MAX_FAILURES 次失败后锁定,
+# 锁定时长按 2 的幂退避(上限 15 分钟),一旦成功立即清零。纯内存实现,带过期清理。
+AUTH_GUARD_MAX_FAILURES = max(1, int(os.environ.get("USBIP_AUTH_MAX_FAILURES", "5") or 5))
+AUTH_GUARD_WINDOW_SECONDS = 300
+AUTH_GUARD_BASE_LOCK_SECONDS = 30
+AUTH_GUARD_MAX_LOCK_SECONDS = 15 * 60
+AUTH_GUARD_IDLE_SECONDS = AUTH_GUARD_WINDOW_SECONDS + AUTH_GUARD_MAX_LOCK_SECONDS
+_AUTH_GUARD_LOCK = threading.Lock()
+_AUTH_FAILURE_TIMES: dict[str, list[float]] = {}
+_AUTH_LOCK_UNTIL: dict[str, float] = {}
+_AUTH_STRIKES: dict[str, int] = {}
+_AUTH_GUARD_SEEN: dict[str, float] = {}
 
 
 def hash_password(password: str, salt: str) -> str:
@@ -89,24 +130,115 @@ def auth_disabled() -> bool:
     return os.environ.get("USBIP_AUTH_DISABLED", "").lower() in ("1", "true", "yes")
 
 
-def load_auth() -> dict[str, object] | None:
-    if auth_disabled():
-        return None
+def password_managed() -> bool:
+    """True when the admin password is owned by the USBIP_WEB_PASSWORD env var."""
+    return bool(os.environ.get("USBIP_WEB_PASSWORD", ""))
+
+
+def initial_password_file() -> Path:
+    """Where the one-off generated password is written for the administrator."""
+    override = os.environ.get("USBIP_INITIAL_PASSWORD_FILE", "")
+    if override:
+        return Path(override)
+    return AUTH_FILE.parent / "initial-password.txt"
+
+
+def generate_initial_password() -> str:
+    return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(INITIAL_PASSWORD_LENGTH))
+
+
+def write_initial_password_file(password: str) -> None:
+    path = initial_password_file()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(password + "\n")
+        os.chmod(str(path), 0o600)
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot write {path}: {exc}", flush=True)
+
+
+def _read_auth_record() -> dict[str, object] | None:
     raw = read_json_file(AUTH_FILE, None)
     if isinstance(raw, dict) and isinstance(raw.get("pwHash"), str) and isinstance(raw.get("salt"), str):
         return raw
+    return None
+
+
+def ensure_env_password() -> None:
+    """Force auth.json to match USBIP_WEB_PASSWORD (once per value per process).
+
+    Runs before every auth read, so it must stay cheap after the first call:
+    the expensive PBKDF2 derivation only happens while the environment value
+    has not been applied yet. The salt is preserved so already-issued session
+    tokens stay valid across a container restart.
+    """
+    global _ENV_PASSWORD_APPLIED
+    password = os.environ.get("USBIP_WEB_PASSWORD", "")
+    if not password or _ENV_PASSWORD_APPLIED == password:
+        return
+    _ENV_PASSWORD_APPLIED = password
+    auth = _read_auth_record()
+    salt = str(auth.get("salt", "")) if auth else ""
+    if not salt:
+        salt = secrets.token_hex(16)
+    record: dict[str, object] = dict(auth) if auth else {"version": 2}
+    record["salt"] = salt
+    record["pwHash"] = hash_password(password, salt)
+    record["mustChange"] = False
+    record["managedByEnv"] = True
+    if auth is not None and auth.get("pwHash") == record["pwHash"] and auth.get("mustChange") is False:
+        return
+    try:
+        atomic_write_json(AUTH_FILE, record)
+        print("[usbip-share-web] admin password is managed by USBIP_WEB_PASSWORD", flush=True)
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot sync auth.json with USBIP_WEB_PASSWORD: {exc}", flush=True)
+
+
+def bootstrap_auth() -> dict[str, object]:
+    """Create the first auth record: env password, else a random one-off."""
     salt = secrets.token_hex(16)
-    auth = {
+    password = os.environ.get("USBIP_WEB_PASSWORD", "")
+    managed = bool(password)
+    if not password:
+        password = generate_initial_password()
+        write_initial_password_file(password)
+        print(
+            "[usbip-share-web] 首次启动:已生成随机管理密码 "
+            f"{password}(同时写入 {initial_password_file()},权限 0600);"
+            "登录后必须立即修改。也可用 USBIP_WEB_PASSWORD 环境变量固定密码。",
+            flush=True,
+        )
+    auth: dict[str, object] = {
         "version": 2,
         "salt": salt,
-        "pwHash": hash_password(DEFAULT_PASSWORD, salt),
-        "mustChange": True,
+        "pwHash": hash_password(password, salt),
+        "mustChange": not managed,
+        "managedByEnv": managed,
     }
     try:
         atomic_write_json(AUTH_FILE, auth)
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot write auth.json: {exc}", flush=True)
     return auth
+
+
+def load_auth() -> dict[str, object] | None:
+    if auth_disabled():
+        return None
+    ensure_env_password()
+    auth = _read_auth_record()
+    if auth is not None:
+        return auth
+    # Cold start: two concurrent requests must not each generate (and print) a
+    # different random password — only the first writer may bootstrap.
+    with AUTH_LOCK:
+        auth = _read_auth_record()
+        if auth is not None:
+            return auth
+        return bootstrap_auth()
 
 
 def session_secret(auth: dict[str, object] | None) -> bytes:
@@ -146,25 +278,324 @@ def verify_login(password: str) -> tuple[bool, str, bool]:
 
 
 def valid_token(token: str) -> bool:
+    # The token comes straight from an unauthenticated request header, so it is
+    # bounded before any parsing: nothing attacker-controlled may reach int()
+    # or HMAC unbounded. Anything that does not parse is simply not a token.
+    if not isinstance(token, str) or not token or len(token) > 512:
+        return False
     env_token = os.environ.get("USBIP_WEB_TOKEN", "")
     if env_token and hmac.compare_digest(token, env_token):
         return True
-    if not token:
-        return False
     # Signed token: verified from the persisted password, so a container
     # rebuild no longer throws the administrator back to the login box.
     auth = load_auth()
     expiry, _, signature = token.partition(".")
     if auth is not None and signature and expiry.isdigit():
         expected = hmac.new(session_secret(auth), expiry.encode("ascii"), hashlib.sha256).hexdigest()
-        if hmac.compare_digest(signature, expected) and int(expiry) > time.time():
-            return True
+        if hmac.compare_digest(signature, expected):
+            try:
+                if int(expiry) > time.time():
+                    return True
+            except (ValueError, OverflowError):
+                # A digit string can still overflow the platform int or trip
+                # the interpreter digit limit: that is a bad token, never an
+                # exception the request thread has to survive.
+                return False
     with SESSION_LOCK:
         now = time.time()
         expired = [key for key, deadline in SESSIONS.items() if deadline <= now]
         for key in expired:
             SESSIONS.pop(key, None)
         return token in SESSIONS
+
+
+def auth_retry_after(address: str) -> int:
+    """Seconds the caller must wait before trying again, 0 when it may now."""
+    now = time.time()
+    with _AUTH_GUARD_LOCK:
+        _prune_auth_guard(now)
+        lock_until = _AUTH_LOCK_UNTIL.get(address, 0.0)
+        if lock_until <= now:
+            _AUTH_LOCK_UNTIL.pop(address, None)
+            return 0
+        return max(1, int(lock_until - now + 0.999))
+
+
+def note_auth_failure(address: str) -> int:
+    """Count one failed credential check; return seconds to wait (0 = not locked).
+
+    The window is sliding: failures older than AUTH_GUARD_WINDOW_SECONDS no
+    longer count. Reaching the threshold starts a lock whose length doubles on
+    every further lock (30s, 60s, 120s … capped at 15 minutes), so an online
+    guessing loop is throttled into uselessness without locking out a human
+    who mistyped a few times.
+    """
+    now = time.time()
+    with _AUTH_GUARD_LOCK:
+        _prune_auth_guard(now)
+        _AUTH_GUARD_SEEN[address] = now
+        failures = [stamp for stamp in _AUTH_FAILURE_TIMES.get(address, [])
+                    if now - stamp <= AUTH_GUARD_WINDOW_SECONDS]
+        failures.append(now)
+        if len(failures) < AUTH_GUARD_MAX_FAILURES:
+            _AUTH_FAILURE_TIMES[address] = failures
+            return 0
+        strikes = _AUTH_STRIKES.get(address, 0) + 1
+        _AUTH_STRIKES[address] = strikes
+        lock_seconds = min(AUTH_GUARD_BASE_LOCK_SECONDS * (2 ** (strikes - 1)), AUTH_GUARD_MAX_LOCK_SECONDS)
+        _AUTH_LOCK_UNTIL[address] = now + lock_seconds
+        _AUTH_FAILURE_TIMES[address] = []
+        return int(lock_seconds)
+
+
+def note_auth_success(address: str) -> None:
+    """Clear every failure/lock state for this address after a good login."""
+    now = time.time()
+    with _AUTH_GUARD_LOCK:
+        _AUTH_FAILURE_TIMES.pop(address, None)
+        _AUTH_LOCK_UNTIL.pop(address, None)
+        _AUTH_STRIKES.pop(address, None)
+        _AUTH_GUARD_SEEN[address] = now
+        _prune_auth_guard(now)
+
+
+def auth_failure_response(address: str) -> tuple[int, dict[str, str] | None]:
+    """(status, extra headers) for a failed credential check."""
+    retry_after = note_auth_failure(address)
+    if not retry_after:
+        return HTTPStatus.UNAUTHORIZED, None
+    return HTTPStatus.TOO_MANY_REQUESTS, {"Retry-After": str(retry_after)}
+
+
+def _prune_auth_guard(now: float) -> None:
+    """Forget addresses that have been quiet long enough (called under lock)."""
+    for address in [item for item, seen in _AUTH_GUARD_SEEN.items() if now - seen > AUTH_GUARD_IDLE_SECONDS]:
+        _AUTH_GUARD_SEEN.pop(address, None)
+        _AUTH_FAILURE_TIMES.pop(address, None)
+        _AUTH_LOCK_UNTIL.pop(address, None)
+        _AUTH_STRIKES.pop(address, None)
+
+
+# ---------------------------------------------------------------------------
+# 共享访问密码(访问控制)
+#
+# USB/IP 协议没有认证字段,所以这里做的是"访问密码 + 源 IP 授权窗口":
+#   1. 客户端用密码调 POST /api/access/authorize,把自己的**来源 IP**写进授权表;
+#   2. gateway.py 只把"来源 IP 在表里且未过期"的 USB/IP 连接转发给 usbipd。
+# 关掉(USBIP_ACCESS_PASSWORD 为空)时:不写授权表文件 → 网关放行一切,所有既有
+# 行为(包括已发布的 Windows 客户端)完全不变。
+# ---------------------------------------------------------------------------
+
+
+def access_password() -> str:
+    return os.environ.get("USBIP_ACCESS_PASSWORD", "")
+
+
+def access_required() -> bool:
+    """True when a shared-access password is configured (access control on)."""
+    return bool(access_password())
+
+
+def access_ttl_seconds() -> int:
+    """Authorization lifetime in seconds (USBIP_ACCESS_TTL_SECONDS, default 12h)."""
+    try:
+        ttl = int(os.environ.get("USBIP_ACCESS_TTL_SECONDS", "") or ACCESS_TTL_DEFAULT_SECONDS)
+    except ValueError:
+        ttl = ACCESS_TTL_DEFAULT_SECONDS
+    return max(ACCESS_TTL_MIN_SECONDS, ttl)
+
+
+def _read_access_grants() -> dict[str, dict[str, object]]:
+    """Raw authorization table as {address: record}; never raises."""
+    raw = read_json_file(ACCESS_FILE, None)
+    clients = raw.get("clients", {}) if isinstance(raw, dict) else {}
+    if not isinstance(clients, dict):
+        return {}
+    grants: dict[str, dict[str, object]] = {}
+    for address, record in clients.items():
+        if not isinstance(address, str) or not isinstance(record, dict):
+            continue
+        try:
+            expires_at = float(record.get("expiresAt", 0))
+        except (TypeError, ValueError):
+            continue
+        try:
+            authorized_at = float(record.get("authorizedAt", 0))
+        except (TypeError, ValueError):
+            authorized_at = 0.0
+        client_id = record.get("clientId", "")
+        client_name = record.get("clientName", "")
+        grants[address] = {
+            "address": address,
+            "clientId": client_id if isinstance(client_id, str) else "",
+            "clientName": client_name if isinstance(client_name, str) else "",
+            "authorizedAt": int(authorized_at),
+            "expiresAt": int(expires_at),
+        }
+    return grants
+
+
+def _write_access_grants(grants: dict[str, dict[str, object]]) -> None:
+    """Persist the table — or delete it when access control is off.
+
+    Deleting is not cosmetic: the file's existence is exactly how gateway.py
+    tells "no password configured, let everybody in" from "password configured,
+    let only these IPs in". An enabled-but-empty table therefore still has to be
+    written (it means deny every USB/IP connection).
+    """
+    with _ACCESS_LOCK:
+        if not access_required():
+            remove_access_file()
+            return
+        atomic_write_json(
+            ACCESS_FILE,
+            {
+                "version": 1,
+                "ttlSeconds": access_ttl_seconds(),
+                "updatedAt": int(time.time()),
+                "clients": grants,
+            },
+        )
+
+
+def remove_access_file() -> None:
+    """Drop the authorization table; the gateway then relays everything again."""
+    try:
+        ACCESS_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot remove {ACCESS_FILE}: {exc}", flush=True)
+
+
+def sync_access_file() -> None:
+    """Start the process with an authorization table that matches the env.
+
+    Called once at startup (and by tests to simulate a restart):
+      * password set  -> write an **empty** table. Clients must re-authorize,
+        which also means rotating USBIP_ACCESS_PASSWORD immediately drops every
+        old authorization, without the server storing anything about the
+        password itself.
+      * password unset -> delete the file, so the gateway goes back to allowing
+        every USB/IP connection (the pre-access-control behaviour).
+    """
+    if not access_required():
+        remove_access_file()
+        return
+    try:
+        _write_access_grants({})
+        print(
+            "[usbip-share-web] 共享访问密码已启用:客户端需先用密码授权,"
+            f"授权表 {ACCESS_FILE},有效期 {access_ttl_seconds()} 秒(心跳续期)",
+            flush=True,
+        )
+    except OSError as exc:
+        print(f"[usbip-share-web] cannot write {ACCESS_FILE}: {exc}", flush=True)
+
+
+def access_grants() -> dict[str, dict[str, object]]:
+    """Live authorization table (expired entries dropped, nothing written)."""
+    if not access_required():
+        return {}
+    now = time.time()
+    with _ACCESS_LOCK:
+        grants = _read_access_grants()
+    return {address: record for address, record in grants.items()
+            if float(record.get("expiresAt", 0)) > now}
+
+
+def access_grant(address: str) -> dict[str, object] | None:
+    """The live grant for `address`, or None when unknown/expired/disabled."""
+    if not address or not access_required():
+        return None
+    with _ACCESS_LOCK:
+        record = _read_access_grants().get(address)
+    if not isinstance(record, dict):
+        return None
+    try:
+        if float(record.get("expiresAt", 0)) <= time.time():
+            return None
+    except (TypeError, ValueError):
+        return None
+    return record
+
+
+def access_granted(address: str) -> bool:
+    return access_grant(address) is not None
+
+
+def access_authorize(address: str, client_id: str, client_name: str) -> dict[str, object]:
+    """Grant `address` access for one TTL and return the stored record."""
+    now = time.time()
+    record: dict[str, object] = {
+        "address": address,
+        "clientId": client_id[:128],
+        "clientName": client_name[:80],
+        "authorizedAt": int(now),
+        "expiresAt": int(now) + access_ttl_seconds(),
+    }
+    with _ACCESS_LOCK:
+        grants = _read_access_grants()
+        grants[address] = record
+        _write_access_grants(grants)
+    return record
+
+
+def access_renew(address: str) -> dict[str, object] | None:
+    """Push an existing grant's expiry back to now+TTL (heartbeat keep-alive).
+
+    Returns None when the address is not authorized any more — a revoked or
+    expired client must not be able to renew itself by heartbeating.
+    """
+    if not address or not access_required():
+        return None
+    now = time.time()
+    with _ACCESS_LOCK:
+        grants = _read_access_grants()
+        record = grants.get(address)
+        if not isinstance(record, dict):
+            return None
+        try:
+            if float(record.get("expiresAt", 0)) <= now:
+                return None
+        except (TypeError, ValueError):
+            return None
+        record["expiresAt"] = int(now) + access_ttl_seconds()
+        grants[address] = record
+        _write_access_grants(grants)
+    return record
+
+
+def access_revoke(address: str | None) -> int:
+    """Drop one authorization, or every one when `address` is empty."""
+    with _ACCESS_LOCK:
+        grants = _read_access_grants()
+        if address:
+            removed = 1 if grants.pop(address, None) is not None else 0
+        else:
+            removed = len(grants)
+            grants = {}
+        _write_access_grants(grants)
+    return removed
+
+
+def access_clients() -> list[dict[str, object]]:
+    """Admin view of the authorization table (contract shape, sorted by IP)."""
+    now = int(time.time())
+    clients: list[dict[str, object]] = []
+    for address, record in sorted(access_grants().items()):
+        expires_at = int(float(record.get("expiresAt", 0)))
+        clients.append(
+            {
+                "address": address,
+                "clientId": str(record.get("clientId", "")),
+                "clientName": str(record.get("clientName", "")),
+                "authorizedAt": int(float(record.get("authorizedAt", 0))),
+                "expiresAt": expires_at,
+                "expiresInSeconds": max(0, expires_at - now),
+            }
+        )
+    return clients
 
 
 def configured_port() -> int:
@@ -193,9 +624,76 @@ def is_shared(busid: str) -> bool:
     return (Path("/sys/bus/usb/drivers/usbip-host") / busid).exists()
 
 
+def netdev_sharing_allowed() -> bool:
+    """Escape hatch for the dangerous case of exporting a USB NIC on purpose.
+
+    Default is "refuse": sharing the adapter that carries the host's default
+    route takes the NAS off the network — including the SSH session an
+    administrator would need to undo it. Set USBIP_ALLOW_NETDEV=true only when
+    the machine really has another way in.
+    """
+    return os.environ.get("USBIP_ALLOW_NETDEV", "").strip().lower() in ("1", "true", "yes")
+
+
+def device_network_interfaces(busid: str) -> list[str]:
+    """Network interface names this USB device exports; [] when it is not a NIC.
+
+    A USB network adapter appears in sysfs as
+    ``<busid>:<config>.<interface>/net/<ifname>``. The interface *class* is
+    useless for this: a Realtek RTL8156 reports the vendor-private class 0xff,
+    not 0x02, while a dongle has no ``net/`` directory at all. Anything we
+    cannot read counts as "not a NIC" — a detection error must never take a
+    legitimate device out of service, and the bind itself is what is dangerous.
+    """
+    if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
+        # Also keeps glob metacharacters out of the pattern below.
+        return []
+    interfaces: list[str] = []
+    try:
+        pattern = USB_INTERFACE_DIR_GLOB.format(busid=busid)
+        interface_dirs = list(SYSFS_USB_DEVICES.glob(pattern))
+    except (OSError, KeyError, IndexError):
+        return []
+    for interface_dir in interface_dirs:
+        try:
+            interfaces.extend(entry.name for entry in (interface_dir / "net").iterdir())
+        except OSError:
+            # No net/ directory (or unreadable): this interface is not a NIC.
+            continue
+    return sorted(interfaces)
+
+
+NETDEV_SHARE_ERROR_PREFIX = "这是一块 USB 网卡"
+
+
+def netdev_share_error(interfaces: list[str]) -> str:
+    names = ", ".join(interfaces)
+    return (
+        f"这是一块 USB 网卡（网络接口 {names}），共享它会让 NAS 自己掉线，已拒绝共享。"
+        "确实需要请在宿主上手工执行 usbip bind。"
+    )
+
+
+def netdev_kick_error(interfaces: list[str]) -> str:
+    names = ", ".join(interfaces)
+    return (
+        f"这是一块 USB 网卡（网络接口 {names}），强制断开会在断开后立刻重新共享它，"
+        "可能让 NAS 再次掉线；请改用「停止共享」。"
+    )
+
+
+def is_conflict_message(message: str) -> bool:
+    """True when a failure means "conflicts with current state" (HTTP 409).
+
+    The request itself was well-formed; the device just is not in a state where
+    the operation is allowed.
+    """
+    return message == HIDDEN_SHARE_ERROR or message.startswith(NETDEV_SHARE_ERROR_PREFIX)
+
+
 def read_sysfs_value(busid: str, filename: str) -> str:
     try:
-        value = (Path("/sys/bus/usb/devices") / busid / filename).read_text(encoding="utf-8", errors="replace")
+        value = (SYSFS_USB_DEVICES / busid / filename).read_text(encoding="utf-8", errors="replace")
         return value.strip()
     except (FileNotFoundError, OSError):
         return ""
@@ -210,7 +708,7 @@ def enrich_identity(device: dict[str, object]) -> None:
     bcd_device = read_sysfs_value(busid, "bcdDevice")
     device_class = read_sysfs_value(busid, "bDeviceClass")
     try:
-        sysfs_path = str((Path("/sys/bus/usb/devices") / busid).resolve())
+        sysfs_path = str((SYSFS_USB_DEVICES / busid).resolve())
     except OSError:
         sysfs_path = ""
     device["serial"] = serial
@@ -286,6 +784,13 @@ def atomic_write_json(path: Path, payload: object) -> None:
 # Provenance fields stored alongside alias/remark so a record can be matched
 # back to the hardware it belongs to before it is ever moved or trusted.
 PROVENANCE_FIELDS = ("vidpid", "serial", "fingerprint")
+# 隐藏标记和 alias/remark 一起存在设备键的记录里,只有字符串 "true" 表示隐藏;
+# 缺失或其它值都当"未隐藏"。
+HIDDEN_FIELD = "hidden"
+HIDDEN_TRUE = "true"
+# Shared by mutate_device() and the HTTP layer: the message doubles as the
+# signal that this failure must be reported as 409 Conflict, not 400.
+HIDDEN_SHARE_ERROR = "该设备已隐藏，请先取消隐藏后再共享"
 
 
 def read_metadata() -> dict[str, dict[str, str]]:
@@ -307,6 +812,11 @@ def read_metadata() -> dict[str, dict[str, str]]:
                 extra = value.get(field, "")
                 if isinstance(extra, str) and extra:
                     record[field] = extra[:200]
+            # The hide flag lives in the same record, so every reader of that
+            # record (alias/remark lookup, migration) must carry it along.
+            hidden = value.get(HIDDEN_FIELD, "")
+            if isinstance(hidden, str) and hidden:
+                record[HIDDEN_FIELD] = hidden[:16]
             result[key] = record
     return result
 
@@ -383,17 +893,44 @@ def metadata_keys(device: dict[str, object], fingerprint_counts: dict[str, int] 
     return keys
 
 
-def device_metadata(device: dict[str, object], fingerprint_counts: dict[str, int] | None = None,
-                    group_index: int = 0,
-                    metadata: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+def device_metadata_record(device: dict[str, object], fingerprint_counts: dict[str, int] | None = None,
+                           group_index: int = 0,
+                           metadata: dict[str, dict[str, str]] | None = None) -> dict[str, str] | None:
+    """The stored record this device's name/remark/hidden flag come from.
+
+    Single lookup used by both device_metadata() and device_hidden(), so the
+    hide flag can never be read from a different key than the displayed name.
+    """
     values = read_metadata() if metadata is None else metadata
     for key in metadata_keys(device, fingerprint_counts, group_index):
         # The model-level legacy key is shared by every unit of a model, so it
         # is only honoured when the record does not contradict this device.
         record = legacy_record(values, device) if key.startswith("device:") else values.get(key)
         if record:
-            return {"alias": record.get("alias", ""), "remark": record.get("remark", "")}
-    return {"alias": "", "remark": ""}
+            return record
+    return None
+
+
+def device_metadata(device: dict[str, object], fingerprint_counts: dict[str, int] | None = None,
+                    group_index: int = 0,
+                    metadata: dict[str, dict[str, str]] | None = None) -> dict[str, str]:
+    record = device_metadata_record(device, fingerprint_counts, group_index, metadata)
+    if record is None:
+        return {"alias": "", "remark": ""}
+    return {"alias": record.get("alias", ""), "remark": record.get("remark", "")}
+
+
+def device_hidden(device: dict[str, object], fingerprint_counts: dict[str, int] | None = None,
+                  group_index: int = 0,
+                  metadata: dict[str, dict[str, str]] | None = None) -> bool:
+    """True when this hardware is marked hidden in the metadata store.
+
+    Like the name, the flag is bound to the hardware (serial / model / group
+    key), not to the USB port, so it survives moving the device to another
+    socket.
+    """
+    record = device_metadata_record(device, fingerprint_counts, group_index, metadata)
+    return bool(record) and record.get(HIDDEN_FIELD) == HIDDEN_TRUE
 
 
 def metadata_binding(device: dict[str, object], fingerprint_counts: dict[str, int] | None = None,
@@ -486,6 +1023,13 @@ def migrate_metadata(devices: list[dict[str, object]],
             if target != legacy and target not in values:
                 values[target] = dict(record)
                 notes.append(f"moved '{record.get('alias', '')}' {legacy} -> {target}")
+            elif target != legacy and record.get(HIDDEN_FIELD) and not values[target].get(HIDDEN_FIELD):
+                # The stable key already carries this device's name, but the
+                # model-level record also says "hidden". Hiding is bound to the
+                # hardware, so it must survive the migration instead of being
+                # dropped along with the legacy key.
+                values[target][HIDDEN_FIELD] = record[HIDDEN_FIELD]
+                notes.append(f"kept hidden flag {legacy} -> {target}")
             values.pop(legacy, None)
             notes.append(f"removed migrated legacy key {legacy}")
 
@@ -523,22 +1067,48 @@ def read_managed() -> set[str]:
 
 
 def write_managed(values: set[str]) -> None:
-    MANAGED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    temporary = MANAGED_FILE.with_suffix(".tmp")
-    temporary.write_text("".join(f"{value}\n" for value in sorted(values)), encoding="utf-8")
-    temporary.replace(MANAGED_FILE)
+    """Replace the managed-busid file atomically.
+
+    The temporary file is unique (mkstemp) and the whole replacement runs under
+    STATE_LOCK: a fixed `<path>.tmp` name let two concurrent writers clobber
+    each other's file and publish a half-written set.
+    """
+    with STATE_LOCK:
+        MANAGED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        payload = "".join(f"{value}\n" for value in sorted(values))
+        temporary_name = ""
+        try:
+            handle, temporary_name = tempfile.mkstemp(
+                prefix=f".{MANAGED_FILE.name}.", suffix=".tmp", dir=str(MANAGED_FILE.parent)
+            )
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, MANAGED_FILE)
+            temporary_name = ""
+        finally:
+            if temporary_name:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
 
 
 def remember_managed(busid: str) -> None:
-    values = read_managed()
-    values.add(busid)
-    write_managed(values)
+    # Read-modify-write under one lock so two concurrent share/unshare calls
+    # cannot drop each other's busid.
+    with STATE_LOCK:
+        values = read_managed()
+        values.add(busid)
+        write_managed(values)
 
 
 def forget_managed(busid: str) -> None:
-    values = read_managed()
-    values.discard(busid)
-    write_managed(values)
+    with STATE_LOCK:
+        values = read_managed()
+        values.discard(busid)
+        write_managed(values)
 
 
 def valid_public_ip(value: object) -> str:
@@ -553,6 +1123,18 @@ def valid_public_ip(value: object) -> str:
 
 
 def read_clients() -> list[dict[str, object]]:
+    """Active client registry, with expired entries pruned.
+
+    The prune-and-rewrite is a read-modify-write over the whole file, so it runs
+    entirely under STATE_LOCK: two concurrent readers used to load the same
+    snapshot and the slower writer silently dropped the records the faster one
+    had just published.
+    """
+    with STATE_LOCK:
+        return _read_clients_locked()
+
+
+def _read_clients_locked() -> list[dict[str, object]]:
     raw = read_json_file(CLIENTS_FILE, {})
     records = raw.get("clients", {}) if isinstance(raw, dict) else {}
     if not isinstance(records, dict):
@@ -643,7 +1225,10 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
         try:
             atomic_write_json(CLIENTS_FILE, {"version": 1, "clients": records})
         except OSError as exc:
-            return False, f"保存客户端状态失败：{exc}", None, []
+            # Never echo the raw OSError back: it leaks container paths and
+            # errno details to an unauthenticated caller.
+            print(f"[usbip-share-web] write clients.json failed: {exc}", flush=True)
+            return False, "保存客户端状态失败，请稍后重试", None, []
 
     # Any heartbeat the watchdog hasn't seen yet must reset the consecutive
     # miss counter — keeping this in lockstep with write_client means a brief
@@ -653,11 +1238,11 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
     cid = client_id[:128]
 
     # 客户端主动告别:用户从托盘菜单选「退出」时,会先发一个 shutdown=true 的
-    # 心跳过来。服务端不要等 60s watchdog,直接对该 client 声称的每个设备
-    # 调 kick_device() —— 等同于管理页点「强制下线」,但 0 延迟。
-    # 注意:客户端进程退出后 vhci 驱动会自动清理本端的 attach 会话,服务端
-    # 这边 unbind+bind 主要是为了让设备共享态立刻回到可分配池,并清掉
-    # clients.json 里残留的连接方信息。
+    # 心跳过来。这条心跳是**免鉴权**的,所以服务端只释放该 clientId 自己的声明
+    # (clients.json 记录 + 排队/通知),绝不调 kick_device()/unbind+bind —— 否则
+    # 任何能读 GET /api/devices 的人都能伪造别人的 clientId 把正在使用的
+    # USB/IP 会话踢掉。设备的真实释放由客户端 TCP 断开后 usbipd 自然回收,
+    # 加上收紧后的 watchdog,以及管理员显式的「强制断开」。
     #
     # 必须在此处直接返回:handle_client_goodbye() → cleanup_client_queue_and_notify()
     # 已经把这个 clientId 从所有等待队列里删掉了,若继续往下走 enqueue 分支就会
@@ -686,6 +1271,13 @@ def update_client(payload: object, address: str) -> tuple[bool, str, dict[str, o
     if enqueue_busids is None or dequeue_busids is None:
         return False, "排队请求格式不正确", None, []
     for busid in enqueue_busids:
+        # Only devices that really exist and are exported can be queued for.
+        # The heartbeat is unauthenticated, so without this check anyone could
+        # park a client on an arbitrary busid and flood (or squeeze out) the
+        # administrator's waitlist. Unknown entries are dropped silently — the
+        # client re-sends its wish on every heartbeat anyway.
+        if not is_shared(busid):
+            continue
         queue_append(busid, cid)
         # Wake the client only once it is actually at the head *and* the
         # device is free; otherwise the wakeup belongs to whoever is ahead.
@@ -736,11 +1328,19 @@ def parse_queue_instructions(payload: dict[str, object], client_id: str) -> tupl
 
 
 def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
-    """Immediately tear down a client that explicitly announced shutdown.
+    """Release a client that announced shutdown — without touching the device.
 
-    Removes the client record from clients.json and force-releases every busid
-    it claimed. Safe to call even if the client record is already gone (e.g.
-    a duplicate goodbye after a flaky network).
+    The `shutdown` flag travels on an **unauthenticated** heartbeat, so it may
+    only ever drop *this clientId's own claim*: the record in clients.json, its
+    waitlist slots and its notification mailbox. It must never run
+    `usbip unbind` + `bind`, because anyone who can read
+    `GET /api/devices` (which is password-free for the Windows client) could
+    learn a victim's clientId, forge a goodbye for it, and repeatedly tear down
+    a USB/IP session that is actively in use.
+
+    The device itself is released by the kernel when the client's USB/IP TCP
+    session ends, by the tightened watchdog, or by the administrator's explicit
+    "force disconnect". Safe to call even if the record is already gone.
     """
     if not client_id:
         return
@@ -760,21 +1360,19 @@ def handle_client_goodbye(client_id: str, busids: list[str]) -> None:
         if not isinstance(busid, str) or not SAFE_BUSID_RE.fullmatch(busid):
             continue
         released.append(busid)
-        ok, message = kick_device(busid)
         print(
-            f"{log_prefix} client={client_id} busid={busid} "
-            f"{'ok - ' + message if ok else 'skipped - ' + message}",
+            f"{log_prefix} client={client_id} busid={busid} released claim only "
+            "(no unbind+bind; the device frees when this client's USB/IP session ends)",
             flush=True,
         )
-    # Whatever happens to the bind/unbind calls, treat an explicit goodbye as
-    # the authoritative end of this client's session — drop both its record
-    # and any in-memory watchdog counter so a fresh registration starts clean.
+    # Whatever happens to the device, treat an explicit goodbye as the
+    # authoritative end of this client's session — drop both its record and any
+    # in-memory watchdog counter so a fresh registration starts clean.
     reset_client_missed_run(client_id)
     cleanup_client_queue_and_notify(client_id)
-    # Advance the waitlist for every device this client was holding, even if
-    # the release itself failed. A failed bind/unbind must not strand the
-    # queue: the next waiter is woken either way, and the device is either
-    # genuinely free now or will be once the watchdog finishes the job.
+    # Advance the waitlist for every device this client claimed: with its claim
+    # gone the queue head is woken once the busid really is free (the helper
+    # refuses to wake anyone while a live holder is still registered).
     for busid in released:
         queue_notify_head_if_free(busid)
 
@@ -1240,6 +1838,36 @@ def connection_info(busid: str) -> list[dict[str, object]]:
     return result
 
 
+def redact_public_ips(devices: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Copy of `devices` with every client-reported `publicIp` removed.
+
+    `publicIp` is a claim the Windows client sends so the admin page can show
+    "which internet address is this peer behind". The client itself never reads
+    it back, and an anonymous caller of the password-free `GET /api/devices`
+    has no business learning the public addresses of the peers on this LAN, so
+    it is stripped unless the caller proved it holds an admin token.
+    Everything the Windows client consumes (clientId, name, address, alias,
+    remark, currentHolder, pendingQueue) is preserved untouched.
+    """
+    redacted: list[dict[str, object]] = []
+    for device in devices:
+        clone = dict(device)
+        connections = device.get("connections")
+        if isinstance(connections, list):
+            clone["connections"] = [
+                {key: value for key, value in connection.items() if key != "publicIp"}
+                if isinstance(connection, dict) else connection
+                for connection in connections
+            ]
+        holder = device.get("currentHolder")
+        if isinstance(holder, dict):
+            # currentHolder aliases connections[0], so it needs its own copy or
+            # the redaction above would be undone by the alias.
+            clone["currentHolder"] = {key: value for key, value in holder.items() if key != "publicIp"}
+        redacted.append(clone)
+    return redacted
+
+
 def list_devices(include_internal: bool = False) -> tuple[list[dict[str, object]], str | None]:
     rc, output = run_usbip("list", "-l")
     if rc != 0:
@@ -1294,6 +1922,10 @@ def list_devices(include_internal: bool = False) -> tuple[list[dict[str, object]
         record = device_metadata(device, fingerprint_counts, group_index, metadata)
         device["alias"] = record["alias"]
         device["remark"] = record["remark"]
+        # Hidden devices are still listed here (callers decide what to expose);
+        # the API layer drops them unless an authenticated caller asked for
+        # them explicitly. Additive field: the Windows client ignores it.
+        device["hidden"] = device_hidden(device, fingerprint_counts, group_index, metadata)
         device["binding"], device["bindingLabel"] = metadata_binding(
             device, fingerprint_counts, group_index, metadata
         )
@@ -1306,6 +1938,10 @@ def list_devices(include_internal: bool = False) -> tuple[list[dict[str, object]
         device["displayName"] = record["alias"] or str(device["description"]) or "未知 USB 设备"
         busid_str = str(device["busid"])
         device["shared"] = is_shared(busid_str)
+        # Network interfaces this device exports ([] for everything that is not
+        # a USB NIC). Additive field: the Windows client ignores it, the admin
+        # page can warn before somebody shares the adapter the NAS itself uses.
+        device["networkInterfaces"] = device_network_interfaces(busid_str)
         # This is client heartbeat information, so expose it even during a
         # short bind/unbind transition; the UI labels it as a registered peer.
         holders = connection_info(busid_str)
@@ -1383,10 +2019,23 @@ def save_device_metadata(busid: str, payload: object) -> tuple[bool, str]:
         stale_keys.discard(target_key)
 
         values = read_metadata()
+        # The hide flag is a separate concern from the name: renaming (or
+        # clearing the name of) a hidden device must never un-hide it.
+        hidden_now = device_hidden(device, counts, int(device.get("modelIndex", 0)), values)
         if alias or remark:
             # Store the provenance along with the text: it is what lets a later
             # migration prove this record belongs to this hardware.
             record = {"alias": alias, "remark": remark}
+            record.update(device_provenance(device))
+            if hidden_now:
+                record[HIDDEN_FIELD] = HIDDEN_TRUE
+            values[target_key] = record
+            for stale in stale_keys:
+                values.pop(stale, None)
+        elif hidden_now:
+            # Nothing left to display, but the device stays hidden: keep a
+            # provenance-only record so the flag survives.
+            record = {"alias": "", "remark": "", HIDDEN_FIELD: HIDDEN_TRUE}
             record.update(device_provenance(device))
             values[target_key] = record
             for stale in stale_keys:
@@ -1398,8 +2047,88 @@ def save_device_metadata(busid: str, payload: object) -> tuple[bool, str]:
         try:
             write_metadata(values)
         except OSError as exc:
-            return False, f"保存设备名称/备注失败：{exc}"
+            print(f"[usbip-share-web] write device-metadata.json failed: {exc}", flush=True)
+            return False, "保存设备名称/备注失败，请稍后重试"
     return True, "设备名称和备注已保存"
+
+
+def set_device_hidden(busid: str, hidden: bool) -> tuple[bool, str]:
+    """Mark (or unmark) a device as hidden, keeping it out of the export list.
+
+    The flag is stored in the same hardware-bound record as alias/remark, using
+    the exact same key selection (`metadata_target_key` / `metadata_keys`), so
+    hiding survives moving the device to another USB socket. Hiding a device
+    that is currently shared first stops sharing — the whole point of hiding a
+    built-in network adapter is that it must never be exported.
+
+    Idempotent: hiding an already hidden device (or unhiding a visible one)
+    succeeds and simply rewrites the flag.
+    """
+    if not SAFE_BUSID_RE.fullmatch(busid):
+        return False, "设备编号格式不正确"
+
+    devices, error = list_devices(include_internal=True)
+    if error is not None:
+        return False, error
+    device = next((item for item in devices if str(item.get("busid")) == busid), None)
+    if device is None:
+        return False, "设备不存在，可能已经拔出"
+
+    # Stop sharing first, so a device that is already exported cannot stay
+    # reachable through a stale export while it is hidden.
+    unshared = False
+    if hidden and is_shared(busid):
+        ok, message = mutate_device(busid, "unshare")
+        if not ok:
+            return False, f"隐藏前停止共享失败：{message}"
+        unshared = True
+
+    fingerprint_counts: dict[str, int] = {}
+    for item in devices:
+        fingerprint = str(item.get("fingerprint", ""))
+        fingerprint_counts[fingerprint] = fingerprint_counts.get(fingerprint, 0) + 1
+    counts = fingerprint_counts
+    group_index = int(device.get("modelIndex", 0))
+
+    with STATE_LOCK:
+        values = read_metadata()
+        target_key = metadata_target_key(device, counts)
+        effective = device_metadata_record(device, counts, group_index, values)
+        record = dict(values.get(target_key) or {})
+        # Never lose the displayed name when the flag lands on a different key
+        # than the one the name currently lives on.
+        if effective:
+            record.setdefault("alias", effective.get("alias", ""))
+            record.setdefault("remark", effective.get("remark", ""))
+        record.setdefault("alias", "")
+        record.setdefault("remark", "")
+        record.update(device_provenance(device))
+        record[HIDDEN_FIELD] = HIDDEN_TRUE if hidden else ""
+        if hidden or record["alias"] or record["remark"]:
+            values[target_key] = record
+        else:
+            # Nothing but an empty flag would be left behind.
+            values.pop(target_key, None)
+        if not hidden:
+            # The flag may also sit on a fallback key this device still reads
+            # (model-level key of a group, legacy key, …): clear them all, or
+            # unhide would be undone by the fallback record.
+            for key in metadata_keys(device, counts, group_index):
+                other = values.get(key)
+                if not other or not other.get(HIDDEN_FIELD):
+                    continue
+                other.pop(HIDDEN_FIELD, None)
+                if not other.get("alias") and not other.get("remark"):
+                    values.pop(key, None)
+        try:
+            write_metadata(values)
+        except OSError as exc:
+            print(f"[usbip-share-web] write device-metadata.json failed: {exc}", flush=True)
+            return False, "保存隐藏状态失败，请稍后重试"
+
+    if hidden:
+        return True, "设备已隐藏，已同时停止共享" if unshared else "设备已隐藏"
+    return True, "设备已取消隐藏"
 
 
 def mutate_device(busid: str, action: str) -> tuple[bool, str]:
@@ -1409,8 +2138,21 @@ def mutate_device(busid: str, action: str) -> tuple[bool, str]:
     devices, error = list_devices()
     if error is not None:
         return False, error
-    if busid not in {str(item["busid"]) for item in devices}:
+    device = next((item for item in devices if str(item["busid"]) == busid), None)
+    if device is None:
         return False, "设备不存在，可能已经拔出"
+    # Hiding exists to keep a device off the USB/IP export list; sharing it
+    # again must be an explicit "unhide" first, never a side effect of share.
+    if action == "share" and device.get("hidden"):
+        return False, HIDDEN_SHARE_ERROR
+    # Refuse to export a USB network adapter: binding it hands the interface to
+    # usbip-host, the host loses that NIC, and if it carried the default route
+    # the NAS drops off the network (SSH included) with no way back. Checked
+    # before COMMAND_LOCK so no unbind/bind can be in flight.
+    if action == "share":
+        interfaces = device_network_interfaces(busid)
+        if interfaces and not netdev_sharing_allowed():
+            return False, netdev_share_error(interfaces)
 
     with COMMAND_LOCK:
         if action == "share":
@@ -1491,6 +2233,13 @@ def kick_device(busid: str) -> tuple[bool, str]:
     drops the attached client immediately, then we re-bind so the device
     remains shared for the next client. Heartbeat records for this busid are
     cleared at the same time so the UI reflects the disconnect right away.
+
+    The re-bind is what makes this unsafe for a USB network adapter: it would
+    hand the NIC back to usbip-host right after releasing it. When the device
+    still shows a ``net/`` interface this refuses and points the administrator
+    at "stop sharing" (unbind only). Once such a device is bound its net/
+    directory is gone, so this cannot be detected any more — the startup
+    default-route check in entrypoint.sh is the safety net for that state.
     """
     if not SAFE_BUSID_RE.fullmatch(busid):
         return False, "设备编号格式不正确"
@@ -1502,6 +2251,9 @@ def kick_device(busid: str) -> tuple[bool, str]:
         return False, "设备不存在，可能已经拔出"
     if not is_shared(busid):
         return False, "设备当前未共享，无法断开远程连接"
+    interfaces = device_network_interfaces(busid)
+    if interfaces and not netdev_sharing_allowed():
+        return False, netdev_kick_error(interfaces)
 
     with COMMAND_LOCK:
         rc, output = run_usbip("unbind", "-b", busid)
@@ -1524,18 +2276,95 @@ def json_bytes(payload: object) -> bytes:
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
+def wants_hidden_devices(query: str) -> bool:
+    """True when the request explicitly asked for hidden devices.
+
+    Only meaningful together with a valid admin token — the caller checks that
+    separately, so an anonymous `?includeHidden=1` still gets a list without
+    hidden devices.
+    """
+    values = parse_qs(query or "").get("includeHidden", [])
+    return any(str(item).strip().lower() in ("1", "true", "yes") for item in values)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "usbip-share-ui/0.4"
+    # StreamRequestHandler.setup() applies this to the connection socket, so a
+    # stalled client (slowloris) is dropped instead of pinning a thread
+    # forever. http.server turns the resulting timeout into a quiet
+    # "Request timed out" log line, not a traceback.
+    timeout = 15
+    # 单端口网关转发的 HTTP 连接会先补一行 PROXY v1 头(见 gateway.proxy_header):
+    # 否则 web.py 看到的对端永远是网关自己,按来源 IP 做访问控制就无从谈起。
+    PROXY_LINE_PREFIX = b"PROXY "
+    PROXY_LINE_MAX_BYTES = 108  # RFC 里的上限,留足余量
+    # 由 setup() 填入;类属性只是兜底,避免任何路径拿到未定义属性。
+    peer_address = ""
+
+    def setup(self) -> None:
+        super().setup()
+        self.peer_address = self.client_address[0] if self.client_address else ""
+        self._consume_gateway_proxy_line()
+
+    def _consume_gateway_proxy_line(self) -> None:
+        """Read the optional PROXY v1 line the single-port gateway prepends.
+
+        Only a loopback peer may announce a source address: the gateway relays
+        from 127.0.0.1, whereas a direct connection from the network (or the
+        fnOS unix-socket proxy) has no business claiming to be somebody else.
+        Absent the line, the socket peer is used — i.e. exactly the old
+        behaviour, which is what keeps direct/management traffic unchanged.
+        """
+        try:
+            if not ipaddress.ip_address(self.peer_address).is_loopback:
+                return
+        except ValueError:
+            return
+        # Peek (do not consume) so a normal request line is left untouched for
+        # handle_one_request(). Read in a loop: the prefix may arrive split.
+        peeked = b""
+        try:
+            while len(peeked) < len(self.PROXY_LINE_PREFIX):
+                chunk = self.connection.recv(len(self.PROXY_LINE_PREFIX) - len(peeked), socket.MSG_PEEK)
+                if not chunk:
+                    return
+                peeked += chunk
+        except (OSError, ValueError):
+            return
+        if peeked != self.PROXY_LINE_PREFIX:
+            return
+        try:
+            line = self.rfile.readline(self.PROXY_LINE_MAX_BYTES)
+        except (OSError, ValueError):
+            return
+        parts = line.decode("latin-1").strip().split(" ")
+        if len(parts) != 6 or parts[1] not in ("TCP4", "TCP6"):
+            return
+        # Keep the wire string verbatim: the authorization table is keyed by
+        # exactly what the gateway put in the line, so normalising here (e.g.
+        # IPv4-mapped IPv6) would make the two sides disagree.
+        try:
+            ipaddress.ip_address(parts[2])
+        except ValueError:
+            return
+        self.peer_address = parts[2]
+
+    def peer_ip(self) -> str:
+        """Observed source address of this request (gateway-announced if any)."""
+        return self.peer_address or (self.client_address[0] if self.client_address else "")
 
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[usbip-share-web] {fmt % args}", flush=True)
 
-    def send_json(self, payload: object, status: int = HTTPStatus.OK) -> None:
+    def send_json(self, payload: object, status: int = HTTPStatus.OK,
+                  headers: dict[str, str] | None = None) -> None:
         body = json_bytes(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -1544,6 +2373,68 @@ class Handler(BaseHTTPRequestHandler):
             return True
         supplied = self.headers.get("X-Admin-Token", "")
         return bool(supplied) and valid_token(supplied)
+
+    def must_change_pending(self) -> bool:
+        """True while the stored admin password is still the initial one."""
+        if os.environ.get("USBIP_WEB_TOKEN", ""):
+            # Fixed-token mode has no password to change.
+            return False
+        if password_managed():
+            return False
+        auth = load_auth()
+        return bool(auth.get("mustChange", False)) if auth else False
+
+    def reject_must_change(self) -> bool:
+        """403 the request when the admin never left the initial password.
+
+        `mustChange` is enforced server-side, not just by the page: a
+        logged-in session that still uses the one-off initial password may
+        only read state, change the password, or log in.
+        """
+        if not self.must_change_pending():
+            return False
+        self.send_json({"ok": False, "error": "must_change_password"}, HTTPStatus.FORBIDDEN)
+        return True
+
+    def send_auth_failure(self, message: str, address: str) -> None:
+        """401, or 429 + Retry-After once this IP exhausted its window."""
+        status, headers = auth_failure_response(address)
+        if status == HTTPStatus.TOO_MANY_REQUESTS:
+            message = "尝试次数过多，请稍后再试"
+        self.send_json({"ok": False, "error": message}, status, headers)
+
+    def send_access_required(self) -> None:
+        """401 telling the client "this server wants the shared-access password"."""
+        self.send_json(
+            {"ok": False, "error": "需要访问密码", "accessRequired": True},
+            HTTPStatus.UNAUTHORIZED,
+        )
+
+    def access_blocked(self, admin_authorized: bool) -> bool:
+        """True when the shared-access gate must reject this request.
+
+        Only ever true while USBIP_ACCESS_PASSWORD is set, and never for a
+        caller that already proved it holds the admin token — that is what
+        keeps the management page (and the fnOS unified gateway) working.
+        """
+        if admin_authorized or not access_required():
+            return False
+        return not access_granted(self.peer_ip())
+
+    def device_list_for_response(self, authorized: bool) -> tuple[list[dict[str, object]], str | None]:
+        """Device list for one API response, honouring the includeHidden rule.
+
+        Hidden devices are dropped unless the caller both proved it holds an
+        admin token *and* asked for them with `?includeHidden=1`. Applied to
+        every response that carries a `devices` array, so the admin page can
+        redraw from any of them and always sees the same list as GET.
+        """
+        devices, error = list_devices()
+        if error is not None:
+            return [], error
+        if authorized and wants_hidden_devices(urlparse(self.path).query):
+            return devices, None
+        return [device for device in devices if not device.get("hidden")], None
 
     def read_body_json(self) -> object:
         try:
@@ -1557,6 +2448,80 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("请求必须是 UTF-8 JSON") from exc
+
+    def do_access_authorize(self) -> None:
+        """POST /api/access/authorize — exchange the password for an IP grant.
+
+        Unauthenticated by design (a client has nothing else to present), so the
+        password check reuses the same per-IP sliding window / exponential
+        backoff as the admin login: an online guessing loop gets throttled.
+        """
+        address = self.peer_ip()
+        if not access_required():
+            # 幂等:没启用访问控制时客户端可以直接放行,不该看到错误。
+            self.send_json({"ok": True, "authorized": True, "required": False})
+            return
+        retry_after = auth_retry_after(address)
+        if retry_after:
+            self.send_json(
+                {"ok": False, "error": "尝试次数过多，请稍后再试"},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                {"Retry-After": str(retry_after)},
+            )
+            return
+        try:
+            payload = self.read_body_json()
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        password = payload.get("password", "") if isinstance(payload, dict) else ""
+        if not isinstance(password, str) or not password:
+            self.send_json({"ok": False, "error": "请输入访问密码"}, HTTPStatus.BAD_REQUEST)
+            return
+        # compare_digest on bytes: the password may be non-ASCII, and the str
+        # form of compare_digest rejects anything outside ASCII with TypeError.
+        if not hmac.compare_digest(password.encode("utf-8"), access_password().encode("utf-8")):
+            retry_after = note_auth_failure(address)
+            if retry_after:
+                self.send_json(
+                    {"ok": False, "error": "尝试次数过多，请稍后再试"},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    {"Retry-After": str(retry_after)},
+                )
+            else:
+                self.send_json({"ok": False, "error": "访问密码不正确"}, HTTPStatus.FORBIDDEN)
+            return
+        client_id = payload.get("clientId", "") if isinstance(payload, dict) else ""
+        client_name = payload.get("clientName", "") if isinstance(payload, dict) else ""
+        if not isinstance(client_id, str):
+            client_id = ""
+        if not isinstance(client_name, str):
+            client_name = ""
+        note_auth_success(address)
+        try:
+            access_authorize(address, client_id.strip(), client_name.strip())
+        except OSError as exc:
+            # Never echo the raw OSError back: it leaks container paths.
+            print(f"[usbip-share-web] cannot write {ACCESS_FILE}: {exc}", flush=True)
+            self.send_json(
+                {"ok": False, "error": "保存授权失败，请稍后重试"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+        print(
+            f"[usbip-share-web] access authorized: address={address} "
+            f"clientId={client_id.strip()[:128] or '-'} ttl={access_ttl_seconds()}s",
+            flush=True,
+        )
+        self.send_json(
+            {
+                "ok": True,
+                "authorized": True,
+                "required": True,
+                "expiresInSeconds": access_ttl_seconds(),
+                "message": "访问已授权，请连接 USB/IP 数据端口",
+            }
+        )
 
     def do_GET(self) -> None:  # noqa: N802 (HTTP handler API)
         path = urlparse(self.path).path
@@ -1591,15 +2556,40 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self.send_json({"ok": True, "service": "usbip-share-web"})
             return
+        if path == "/api/access":
+            # 客户端用它判断"这台服务器要不要密码"。永远免鉴权、无副作用:
+            # 不带管理员令牌、也不需要访问密码,否则客户端没法开始。
+            self.send_json({"ok": True, "required": access_required()})
+            return
         if path == "/api/devices":
             # Client read path is intentionally password-free: the Windows
             # client must be able to list devices without the admin password.
             # Admin write operations behind authorized() must use login/token.
-            devices, error = list_devices()
+            # Anonymous callers get the list without the client-reported
+            # `publicIp` (see redact_public_ips); the admin page sends its
+            # token and keeps the full record.
+            # Hidden devices are absent unless an authenticated caller asks for
+            # them with `?includeHidden=1`.
+            # 共享访问密码开启后,匿名且未授权的来源 IP 连设备列表都拿不到
+            # (只读也会泄露哪些设备可被占用);带管理令牌的管理页不受影响。
+            authorized = self.authorized()
+            if self.access_blocked(authorized):
+                self.send_access_required()
+                return
+            devices, error = self.device_list_for_response(authorized)
             if error:
                 self.send_json({"ok": False, "error": error}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
-            self.send_json({"ok": True, "devices": devices, "usbipPort": configured_port()})
+            if not authorized:
+                devices = redact_public_ips(devices)
+            self.send_json({
+                "ok": True,
+                "devices": devices,
+                "usbipPort": configured_port(),
+                # Effective client-liveness timeout, so the page can render the
+                # real number instead of a hard-coded guess (0 = never).
+                "kickIdleSeconds": KICK_IDLE_SECONDS,
+            })
             return
 
         if path == "/api/session":
@@ -1612,12 +2602,29 @@ class Handler(BaseHTTPRequestHandler):
                     "authorized": self.authorized(),
                     "authDisabled": auth_disabled(),
                     "mustChange": bool(auth.get("mustChange", False)) if auth else False,
+                    # True = the password comes from USBIP_WEB_PASSWORD, so the
+                    # page hides the (permanently reverted) change form.
+                    "passwordManaged": password_managed(),
                 }
             )
             return
 
         if not self.authorized():
             self.send_json({"ok": False, "error": "未登录或登录已过期"}, HTTPStatus.UNAUTHORIZED)
+            return
+
+        # Admin view of the shared-access authorization table. Like every other
+        # management endpoint it sits behind the mustChange gate.
+        if path == "/api/access/clients":
+            if self.reject_must_change():
+                return
+            self.send_json(
+                {
+                    "ok": True,
+                    "required": access_required(),
+                    "clients": access_clients(),
+                }
+            )
             return
 
         # Admin reads of the per-device waiting list.
@@ -1632,6 +2639,17 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path == "/api/login":
+            # 网关转发的请求用 PROXY 头带来的真实来源 IP 做限速键,否则经网关
+            # 进来的所有客户端都会共用 127.0.0.1 这一个桶。
+            address = self.peer_ip()
+            retry_after = auth_retry_after(address)
+            if retry_after:
+                self.send_json(
+                    {"ok": False, "error": "尝试次数过多，请稍后再试"},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    {"Retry-After": str(retry_after)},
+                )
+                return
             try:
                 payload = self.read_body_json()
             except ValueError as exc:
@@ -1643,21 +2661,39 @@ class Handler(BaseHTTPRequestHandler):
                 return
             success, token, must_change = verify_login(password)
             if not success:
-                self.send_json({"ok": False, "error": "密码不正确"}, HTTPStatus.UNAUTHORIZED)
+                self.send_auth_failure("密码不正确", address)
                 return
+            note_auth_success(address)
             self.send_json({"ok": True, "token": token, "mustChange": must_change})
+            return
+
+        if path == "/api/access/authorize":
+            self.do_access_authorize()
             return
 
         # Client heartbeat/registration must remain password-free so the
         # Windows client can report connection owners without the admin password.
         client_match = re.fullmatch(r"/api/clients/(register|heartbeat)", path)
         if client_match:
+            address = self.peer_ip()
+            # 开了访问控制就必须先授权:心跳是免鉴权写操作,未授权的 IP 既不能
+            # 登记占用方,也不能占用排队名额。这里在解析/写盘之前就返回,保证
+            # "未授权 → 不做任何写操作"。
+            if access_required() and not access_granted(address):
+                self.send_access_required()
+                return
+            if access_required():
+                # 授权过的客户端每拍心跳都续期,所以只要还在用就不会掉线。
+                try:
+                    access_renew(address)
+                except OSError as exc:
+                    print(f"[usbip-share-web] cannot renew access grant: {exc}", flush=True)
             try:
                 payload = self.read_body_json()
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
-            success, message, record, queue_notifications = update_client(payload, self.client_address[0])
+            success, message, record, queue_notifications = update_client(payload, address)
             if success:
                 response = {
                     "ok": True,
@@ -1677,8 +2713,25 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/change-password":
+            address = self.peer_ip()
+            retry_after = auth_retry_after(address)
+            if retry_after:
+                self.send_json(
+                    {"ok": False, "error": "尝试次数过多，请稍后再试"},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    {"Retry-After": str(retry_after)},
+                )
+                return
             if os.environ.get("USBIP_WEB_TOKEN", ""):
                 self.send_json({"ok": False, "error": "当前使用管理令牌模式，无法修改密码"}, HTTPStatus.BAD_REQUEST)
+                return
+            if password_managed():
+                # The environment variable is re-applied on every start, so a
+                # page-side change would silently revert at the next restart.
+                self.send_json(
+                    {"ok": False, "error": "密码由环境变量 USBIP_WEB_PASSWORD 托管，无法在页面修改"},
+                    HTTPStatus.BAD_REQUEST,
+                )
                 return
             try:
                 payload = self.read_body_json()
@@ -1700,7 +2753,7 @@ class Handler(BaseHTTPRequestHandler):
             salt = str(auth.get("salt", ""))
             expected = str(auth.get("pwHash", ""))
             if not salt or not expected or not hmac.compare_digest(hash_password(old_password, salt), expected):
-                self.send_json({"ok": False, "error": "当前密码不正确"}, HTTPStatus.UNAUTHORIZED)
+                self.send_auth_failure("当前密码不正确", address)
                 return
             if old_password == new_password:
                 self.send_json({"ok": False, "error": "新密码不能与当前密码相同"}, HTTPStatus.BAD_REQUEST)
@@ -1712,13 +2765,50 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     atomic_write_json(AUTH_FILE, auth)
                 except OSError as exc:
-                    self.send_json({"ok": False, "error": f"保存密码失败：{exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                    print(f"[usbip-share-web] write auth.json failed: {exc}", flush=True)
+                    self.send_json(
+                        {"ok": False, "error": "保存密码失败，请稍后重试"},
+                        HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
                     return
+            note_auth_success(address)
             self.send_json({"ok": True, "message": "密码已修改"})
             return
 
         if not self.authorized():
             self.send_json({"ok": False, "error": "未登录或登录已过期"}, HTTPStatus.UNAUTHORIZED)
+            return
+
+        # From here on every endpoint mutates server state. While the admin is
+        # still on the one-off initial password, none of them may be used.
+        if self.reject_must_change():
+            return
+
+        if path == "/api/access/clients/revoke":
+            try:
+                payload = self.read_body_json()
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            address = payload.get("address", "") if isinstance(payload, dict) else ""
+            if not isinstance(address, str):
+                address = ""
+            # 不带 address(或空字符串)= 吊销全部。注意:吊销只影响**新**连接,
+            # 已经建立的 USB/IP 会话不会因此断开(网关只在连接建立时判定一次)。
+            removed = access_revoke(address.strip() or None)
+            print(
+                f"[usbip-share-web] access revoked: {address.strip() or 'all clients'} "
+                f"({removed} removed)",
+                flush=True,
+            )
+            self.send_json(
+                {
+                    "ok": True,
+                    "revoked": removed,
+                    "required": access_required(),
+                    "clients": access_clients(),
+                }
+            )
             return
 
         metadata_match = re.fullmatch(r"/api/devices/([^/]+)/metadata", path)
@@ -1730,8 +2820,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             busid = unquote(metadata_match.group(1))
             success, message = save_device_metadata(busid, payload)
-            devices, error = list_devices()
+            devices, error = self.device_list_for_response(True)
             response: dict[str, object] = {"ok": success, "message": message}
+            if error is None:
+                response["devices"] = devices
+            if not success:
+                response["error"] = message
+            self.send_json(response, HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
+            return
+
+        hidden_match = re.fullmatch(r"/api/devices/([^/]+)/(hide|unhide)", path)
+        if hidden_match:
+            busid = unquote(hidden_match.group(1))
+            success, message = set_device_hidden(busid, hidden_match.group(2) == "hide")
+            devices, error = self.device_list_for_response(True)
+            response = {"ok": success, "message": message}
             if error is None:
                 response["devices"] = devices
             if not success:
@@ -1762,19 +2865,29 @@ class Handler(BaseHTTPRequestHandler):
             success, message = kick_device(busid)
         else:
             success, message = mutate_device(busid, action)
-        devices, error = list_devices()
+        devices, error = self.device_list_for_response(True)
         payload = {"ok": success, "message": message}
         if error is None:
             payload["devices"] = devices
         if not success:
             payload["error"] = message
-        self.send_json(payload, HTTPStatus.OK if success else HTTPStatus.BAD_REQUEST)
+        if success:
+            status = HTTPStatus.OK
+        elif is_conflict_message(message):
+            # Sharing a hidden device, or exporting a USB NIC: the request is
+            # fine, it conflicts with the current state of the resource.
+            status = HTTPStatus.CONFLICT
+        else:
+            status = HTTPStatus.BAD_REQUEST
+        self.send_json(payload, status)
 
 
     def do_DELETE(self) -> None:  # noqa: N802 (HTTP handler API)
         path = urlparse(self.path).path
         if not self.authorized():
             self.send_json({"ok": False, "error": "未登录或登录已过期"}, HTTPStatus.UNAUTHORIZED)
+            return
+        if self.reject_must_change():
             return
         queue_match = re.fullmatch(r"/api/devices/([^/]+)/queue/([^/]+)", path)
         if not queue_match:
@@ -1829,7 +2942,7 @@ class Handler(BaseHTTPRequestHandler):
         # heartbeat round-trip.
         if queue_list and queue_list[0] == client_id:
             queue_notify_head_if_free(busid)
-        devices, error = list_devices()
+        devices, error = self.device_list_for_response(True)
         response = {
             "ok": True,
             "busid": busid,
@@ -1846,101 +2959,148 @@ class Handler(BaseHTTPRequestHandler):
             return
         queue_notify_busid_holders(busid)
         queue_clear(busid)
-        devices, error = list_devices()
+        devices, error = self.device_list_for_response(True)
         response = {"ok": True, "busid": busid, "queue": []}
         if error is None:
             response["devices"] = devices
         self.send_json(response, HTTPStatus.OK)
 
 
-def watchdog_loop() -> None:
-    """Force-release devices when their claiming client stops heartbeating.
+def force_release_allowed(busid: str, stale_address: str) -> tuple[bool, str]:
+    """May a stale claim on `busid` be force-released with unbind+bind?
 
-    A client that powers off without detaching can leave the USB/IP import
-    held server-side for a long time (TCP keepalive only notices eventually).
+    Only when *all* of these hold:
+
+    * the busid really is exported right now (nothing to unbind otherwise);
+    * no live client claims it any more, or every claimant sits at the same
+      peer address as the stale record (the same host re-registered).
+
+    A heartbeat's `busids` list is unauthenticated: an attacker can park a
+    *stale* claim on a device somebody else is using, and the watchdog would
+    then unbind the real holder on the attacker's behalf. The address check is
+    what stops that reverse kick — a claim we cannot attribute to this peer is
+    only ever discarded, never acted upon.
+    """
+    if not is_shared(busid):
+        return False, "busid is not shared"
+    holders = connection_info(busid)
+    if not holders:
+        return True, "no live holder"
+    addresses = {str(holder.get("address", "")) for holder in holders}
+    if stale_address and addresses == {stale_address}:
+        return True, "only holder is the same peer"
+    return False, f"held by another peer ({', '.join(sorted(addresses)) or 'unknown'})"
+
+
+def watchdog_sweep() -> None:
+    """One watchdog pass: force-release devices of clients that went silent.
+
+    A client that powers off without detaching can leave the USB/IP import held
+    server-side for a long time (TCP keepalive only notices eventually).
     Managed clients post a heartbeat every EXPECTED_HEARTBEAT_SECONDS on the
-    happy path. To survive ordinary network jitter we now require
-    MISSED_RUN_THRESHOLD *consecutive* watchdog cycles (each
-    WATCHDOG_INTERVAL_SECONDS long) with no fresh heartbeat before any
-    unbind+bind fires. Explicit `shutdown:true` goodbyes take a separate,
-    immediate path via handle_client_goodbye and bypass this counter.
+    happy path, and we require MISSED_RUN_THRESHOLD *consecutive* watchdog
+    cycles with no fresh heartbeat before anything is released. Even then the
+    release only happens when force_release_allowed() says the device is not
+    demonstrably held by somebody else.
+    """
+    log_prefix = "[usbip-share-watchdog]"
+    records = read_client_records()
+    now = time.time()
+    live_ids: set[str] = set()
+    for client_id, record in records.items():
+        live_ids.add(client_id)
+        try:
+            last_seen = float(record.get("lastSeen", 0))
+        except (TypeError, ValueError):
+            last_seen = 0
+        busids_raw = record.get("busids", [])
+        busids = (
+            [item for item in busids_raw if isinstance(item, str)]
+            if isinstance(busids_raw, list)
+            else []
+        )
+        gap = now - last_seen
+        if gap <= HEARTBEAT_SAFE_GAP_SECONDS:
+            # Fresh heartbeat within the safe envelope: zero the miss
+            # counter for this client and move on.
+            reset_client_missed_run(client_id)
+            continue
+        missed = bump_client_missed_run(client_id)
+        if missed < MISSED_RUN_THRESHOLD:
+            # Still inside the redundancy window — log it so operators
+            # can see the counter climbing, but do not touch devices.
+            print(
+                f"{log_prefix} client={client_id} no heartbeat for "
+                f"{gap:.0f}s (missed_run={missed}/"
+                f"{MISSED_RUN_THRESHOLD}, "
+                f"busids={','.join(busids) or '-'})",
+                flush=True,
+            )
+            continue
+        # Threshold hit: the client has missed MISSED_RUN_THRESHOLD
+        # consecutive watchdog cycles. Drop its record so the UI stops showing
+        # it, and release the devices it claimed — but only the ones that are
+        # provably not in use by a different peer.
+        print(
+            f"{log_prefix} client={client_id} missed "
+            f"{missed} consecutive heartbeats (>= "
+            f"{HEARTBEAT_SAFE_GAP_SECONDS:g}s gap each, "
+            f"busids={','.join(busids) or '-'}), evaluating release",
+            flush=True,
+        )
+        claimed = [
+            (busid, str(record.get("address", "")))
+            for busid in busids
+            if SAFE_BUSID_RE.fullmatch(busid)
+        ]
+        removed = remove_client_record(client_id)
+        reset_client_missed_run(client_id)
+        # The client itself is gone, so drop it from every waitlist
+        # and clear its mailbox. Survivors must not stay parked behind
+        # a tombstone, so cleanup also promotes + wakes any queue head
+        # that this removal exposed.
+        cleanup_client_queue_and_notify(client_id)
+        if not claimed:
+            if removed:
+                print(
+                    f"{log_prefix} client={client_id} record purged "
+                    "(no live busids)",
+                    flush=True,
+                )
+            continue
+        for busid, stale_address in claimed:
+            allowed, reason = force_release_allowed(busid, stale_address)
+            if not allowed:
+                print(
+                    f"{log_prefix} client={client_id} busid={busid} "
+                    f"force-release skipped: {reason}",
+                    flush=True,
+                )
+                continue
+            ok, message = kick_device(busid)
+            print(
+                f"{log_prefix} client={client_id} busid={busid} "
+                f"{'ok - ' + message if ok else 'failed - ' + message}",
+                flush=True,
+            )
+            if ok:
+                queue_notify_head_if_free(busid)
+    prune_stale_missed_runs(live_ids)
+    queue_drop_stale_clients(live_ids)
+
+
+def watchdog_loop() -> None:
+    """Run watchdog_sweep() forever, one pass per WATCHDOG_INTERVAL_SECONDS.
+
+    Explicit `shutdown:true` goodbyes take a separate path
+    (handle_client_goodbye) which releases the client's claim immediately but
+    never touches the device itself.
     """
     log_prefix = "[usbip-share-watchdog]"
     while True:
         time.sleep(WATCHDOG_INTERVAL_SECONDS)
         try:
-            records = read_client_records()
-            now = time.time()
-            live_ids: set[str] = set()
-            for client_id, record in records.items():
-                live_ids.add(client_id)
-                try:
-                    last_seen = float(record.get("lastSeen", 0))
-                except (TypeError, ValueError):
-                    last_seen = 0
-                busids_raw = record.get("busids", [])
-                busids = (
-                    [item for item in busids_raw if isinstance(item, str)]
-                    if isinstance(busids_raw, list)
-                    else []
-                )
-                gap = now - last_seen
-                if gap <= HEARTBEAT_SAFE_GAP_SECONDS:
-                    # Fresh heartbeat within the safe envelope: zero the miss
-                    # counter for this client and move on.
-                    reset_client_missed_run(client_id)
-                    continue
-                missed = bump_client_missed_run(client_id)
-                if missed < MISSED_RUN_THRESHOLD:
-                    # Still inside the redundancy window — log it so operators
-                    # can see the counter climbing, but do not touch devices.
-                    print(
-                        f"{log_prefix} client={client_id} no heartbeat for "
-                        f"{gap:.0f}s (missed_run={missed}/"
-                        f"{MISSED_RUN_THRESHOLD}, "
-                        f"busids={','.join(busids) or '-'})",
-                        flush=True,
-                    )
-                    continue
-                # Threshold hit: the client has missed MISSED_RUN_THRESHOLD
-                # consecutive watchdog cycles. Force-release anything it still
-                # claims and drop its record so the UI stops showing it.
-                print(
-                    f"{log_prefix} client={client_id} missed "
-                    f"{missed} consecutive heartbeats (>= "
-                    f"{HEARTBEAT_SAFE_GAP_SECONDS:g}s gap each, "
-                    f"busids={','.join(busids) or '-'}), force-releasing",
-                    flush=True,
-                )
-                claimed_busids = [
-                    busid for busid in busids if SAFE_BUSID_RE.fullmatch(busid)
-                ]
-                removed = remove_client_record(client_id)
-                reset_client_missed_run(client_id)
-                # The client itself is gone, so drop it from every waitlist
-                # and clear its mailbox. Survivors must not stay parked behind
-                # a tombstone, so cleanup also promotes + wakes any queue head
-                # that this removal exposed.
-                cleanup_client_queue_and_notify(client_id)
-                if not claimed_busids:
-                    if removed:
-                        print(
-                            f"{log_prefix} client={client_id} record purged "
-                            "(no live busids)",
-                            flush=True,
-                        )
-                    continue
-                for busid in claimed_busids:
-                    ok, message = kick_device(busid)
-                    print(
-                        f"{log_prefix} client={client_id} busid={busid} "
-                        f"{'ok - ' + message if ok else 'failed - ' + message}",
-                        flush=True,
-                    )
-                    if ok:
-                        queue_notify_head_if_free(busid)
-            prune_stale_missed_runs(live_ids)
-            queue_drop_stale_clients(live_ids)
+            watchdog_sweep()
         except Exception as exc:  # noqa: BLE001 - keep the loop alive
             print(f"{log_prefix} error: {exc}", flush=True)
 
@@ -1956,6 +3116,13 @@ def main() -> None:
         raise SystemExit(f"missing {INDEX_FILE}")
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    # Bootstrap the admin credential now, so the generated password (or the
+    # env-managed sync) is visible in the startup log instead of appearing on
+    # the first request.
+    load_auth()
+    # 共享访问密码的授权表必须在开始服务之前定好:启用了就写一个空表
+    # (等客户端来授权),没启用就删掉文件 —— 网关以"文件在不在"判断要不要拦。
+    sync_access_file()
     watchdog = threading.Thread(target=watchdog_loop, name="usbip-kick-watchdog", daemon=True)
     watchdog.start()
     print(f"[usbip-share-web] Chinese management UI listening on {args.host}:{args.port}", flush=True)

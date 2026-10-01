@@ -11,6 +11,7 @@ USB/IP 会话表现为"没人操作也每 ~20 秒断一次"。这里用一个静
 import socket
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -86,7 +87,10 @@ for backend in (usbip_backend, web_backend):
     threading.Thread(target=backend.serve_forever, daemon=True).start()
 
 gw = gateway.Gateway(("127.0.0.1", 0), "127.0.0.1",
-                     usbip_backend.server_address[1], web_backend.server_address[1])
+                     usbip_backend.server_address[1], web_backend.server_address[1],
+                     # 显式指向一个不存在的授权表:本用例只测分流,不能因为跑测试的
+                     # 机器上正好启用了共享访问密码而把 127.0.0.1 拦掉。
+                     str(Path(tempfile.mkdtemp()) / "authorized-clients.json"))
 threading.Thread(target=gw.serve_forever, daemon=True).start()
 port = gw.server_address[1]
 

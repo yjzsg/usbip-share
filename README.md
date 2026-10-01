@@ -25,6 +25,7 @@
 | 路径 | 内容 |
 |---|---|
 | `server/` | 服务端：Dockerfile、compose、单端口分流网关、中文管理页、设备名称/备注元数据维护逻辑与自动化测试 |
+| `server/fnos/` | 飞牛 fnOS 应用包源码（`manifest` / `wizard` / `cmd` / `docker`）+ `build.sh`、`verify.sh`，见 [`server/fnos/README.md`](server/fnos/README.md) |
 | `client/` | Windows 客户端：上游 BSD 许可声明 + 本分支相对基线的完整改动补丁 + 构建说明 |
 
 ## 致谢
@@ -47,8 +48,25 @@ cp .env.example .env      # 按需修改端口等
 docker compose up -d --build
 ```
 
-然后浏览器打开 `http://<NAS-IP>:5555/`：首次登录密码为 `123456`，登录后请立即修改。
-设备共享、名称与备注都在这个页面操作。详细步骤见 [`server/README.md`](server/README.md)。
+然后浏览器打开 `http://<NAS-IP>:5555/`。**没有出厂默认密码**：未设置 `USBIP_WEB_PASSWORD` 时，
+首次启动会生成一个随机密码写入配置目录的 `initial-password.txt` 并在日志里打印，登录后必须立即修改
+（未改密前所有管理写操作会被服务端拒绝）。设备共享、名称与备注都在这个页面操作。
+详细步骤见 [`server/README.md`](server/README.md)。
+
+## 快速开始（飞牛 fnOS 应用）
+
+服务端也可以直接打成飞牛应用（`.fpk`）：装完后在飞牛桌面点图标，就能在**小窗里打开中文管理页**；
+服务端口、管理页密码、客户端失联释放时间都在「应用设置」里改，共享哪些设备在页面里点，不需要手敲 busid。
+
+```sh
+cd server/fnos
+bash build.sh            # 同步 server/ 源码 → 校验 → fnpack build
+# 产物：server/fnos/dist/usbip-share.fpk
+```
+
+然后在飞牛「应用中心 → 手动安装」上传该 fpk（升级/卸载也只能走网页端，`appcenter-cli` 会拒绝）。
+桌面入口走飞牛统一网关、复用 NAS 登录态；USB/IP 仍然只对外暴露一个端口。
+完整说明、设计取舍与真机踩坑记录见 [`server/fnos/README.md`](server/fnos/README.md)。
 
 ## 快速开始（客户端）
 
