@@ -196,14 +196,43 @@
       .wrap { padding-left: 14px; padding-right: 14px; }
     }
     @media (max-width: 900px) { .filters { flex-wrap: wrap; } }
-    @media (max-width: 650px) {
-      .search-field { max-width: none; }
-      .filter-field { flex: 1; }
+    /* 手机 / 飞牛 App 的 webview：设备表 min-width 900px，横向拖太难受，
+       直接改成卡片式纵向堆叠 —— 每台设备一张卡，字段名用 data-label 带出来。 */
+    @media (max-width: 720px) {
+      .wrap { padding: 14px 12px 24px; }
+      .top { align-items: stretch; flex-direction: column; gap: 10px; }
+      .top-actions { justify-content: flex-start; }
+      h1 { font-size: 20px; }
+      .statbar { gap: 2px 14px; padding: 10px 12px; }
+      .stat strong { font-size: 16px; }
+      .toolbar { align-items: stretch; flex-direction: column; gap: 8px; padding: 12px; }
+      .filters { align-items: stretch; flex-direction: column; gap: 10px; padding: 12px; }
+      .search-field, .filter-field { max-width: none; width: 100%; }
+      .filters .chip, .filters > button { width: 100%; }
+      .table-wrap { overflow-x: visible; }
+      table { display: block; min-width: 0; }
+      thead { display: none; }
+      tbody, tr, td { display: block; }
+      tr { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 10px; }
+      tbody tr:last-child { margin-bottom: 0; }
+      td { border: 0; padding: 4px 0; }
+      /* 第一列就是设备名，当卡片标题用，不再重复标「设备：」。 */
+      td:not(:first-child)::before {
+        content: attr(data-label) '：';
+        color: var(--muted);
+        font-size: 12px;
+      }
+      /* 上面 1340px 的规则把第 3 列藏了，这里要显式恢复（同优先级、靠后生效）。 */
+      th:nth-child(3), td:nth-child(3) { display: block; }
+      /* 卡片布局没有横向滚动，操作列不需要再钉在右侧。 */
+      td:last-child { position: static; background: none; }
+      th:last-child::before, td:last-child::before { background: none; }
+      .actions { flex-wrap: wrap; }
+      .actions button { flex: 1 1 auto; }
+      .access-row { flex-wrap: wrap; }
+      .modal { padding: 12px; }
+      .center-card { padding: 20px 18px; }
       .error-banner { align-items: flex-start; }
-      .wrap { padding-top: 20px; }
-      .top { align-items: flex-start; flex-direction: column; }
-      h1 { font-size: 21px; }
-      .toolbar { align-items: flex-start; flex-direction: column; }
     }
   </style>
 </head>
@@ -754,12 +783,12 @@
           ? '<div class="device-sub warn-text">同型号多台且无序列号，无法区分个体</div>'
           : '';
         return `<tr class="${hidden ? 'row-hidden' : ''}">
-          <td>${alias}<div class="device-sub">VID/PID：${escapeHtml(device.vidpid)}</div>${device.remark ? `<div class="device-sub">备注：${escapeHtml(device.remark)}</div>` : ''}${dupHint}${isNetdev ? `<div class="device-sub warn-text">网络接口：${escapeHtml(netIfaces.join('、'))}</div>` : ''}</td>
-          <td><code>${escapeHtml(device.busid)}</code></td>
-          <td>${bindBadge}</td>
-          <td>${connectionSummary(device.connections)}${queueSummary(device.pendingQueue)}</td>
-          <td><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span>${isNetdev ? '<span class="badge net-badge">系统网卡·不可共享</span>' : ''}${hidden ? '<span class="badge hidden-badge">已隐藏</span>' : ''}</td>
-          <td><div class="actions"><button class="secondary" data-action="edit" data-busid="${busidAttr}">编辑名称</button>${action}${hideButton}</div></td>
+          <td data-label="设备">${alias}<div class="device-sub">VID/PID：${escapeHtml(device.vidpid)}</div>${device.remark ? `<div class="device-sub">备注：${escapeHtml(device.remark)}</div>` : ''}${dupHint}${isNetdev ? `<div class="device-sub warn-text">网络接口：${escapeHtml(netIfaces.join('、'))}</div>` : ''}</td>
+          <td data-label="Bus ID"><code>${escapeHtml(device.busid)}</code></td>
+          <td data-label="绑定依据">${bindBadge}</td>
+          <td data-label="占用与排队">${connectionSummary(device.connections)}${queueSummary(device.pendingQueue)}</td>
+          <td data-label="状态"><span class="badge ${shared ? 'shared' : 'free'}">${shared ? '● 已共享' : '○ 未共享'}</span>${isNetdev ? '<span class="badge net-badge">系统网卡·不可共享</span>' : ''}${hidden ? '<span class="badge hidden-badge">已隐藏</span>' : ''}</td>
+          <td data-label="操作"><div class="actions"><button class="secondary" data-action="edit" data-busid="${busidAttr}">编辑名称</button>${action}${hideButton}</div></td>
         </tr>`;
       }).join('');
       const html = `<table><thead><tr><th>设备（显示名称）</th><th>Bus ID</th><th>名称绑定依据</th><th>占用与排队</th><th>状态</th><th>操作</th></tr></thead><tbody>${rows}</tbody></table>`;

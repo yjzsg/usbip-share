@@ -337,6 +337,17 @@ async function run(options = {}) {
   check('未启用访问密码时显示未启用', r.el('accessState').textContent.includes('未启用'));
   check('读取失败时不抛异常，只显示占位', r.el('accessList').innerHTML.length >= 0);
 
+  console.log('[J] 窄屏（手机 / 飞牛 App webview）卡片布局');
+  r = await run();
+  const rowHtml = r.el('content').innerHTML;
+  check('每个单元格都带 data-label，窄屏堆叠时才显示得出字段名',
+    ['设备', 'Bus ID', '绑定依据', '占用与排队', '状态', '操作']
+      .every(label => rowHtml.includes('data-label="' + label + '"')));
+  check('样式里有 720px 的卡片布局断点', /max-width:\s*720px/.test(page));
+  check('窄屏断点把表格改成块级堆叠', /table\s*\{\s*display:\s*block;\s*min-width:\s*0/.test(page));
+  check('窄屏断点恢复被 1340px 藏掉的第 3 列',
+    /td:nth-child\(3\)\s*\{\s*display:\s*block/.test(page));
+
   console.log('[I] 深色 / 浅色切换');
   r = await run();
   check('没有历史选择时跟随系统（浅色）', r.dom.document.documentElement.getAttribute('data-theme') === 'light');
