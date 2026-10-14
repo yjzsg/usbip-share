@@ -314,9 +314,9 @@ def proxy_token(secret: str) -> str:
 def proxy_header(address: str, source_port: int, local: object, secret: str = "") -> bytes:
     """PROXY v1 头:把真实来源 IP 告诉 web.py。
 
-    网关只是 TCP 转发,web.py 看到的对端永远是网关自己,按来源 IP 做访问控制就
-    无从谈起。这行头只在**访问控制开启时**才补(见 GatewayHandler.handle),所以
-    没设密码的老部署(以及不认识这行头的老 web.py)行为完全不变。
+    网关只是 TCP 转发,web.py 看到的对端永远是网关自己 —— 不补这行头,按来源 IP 做
+    访问控制无从谈起,**连"谁在用哪台设备"都分不清**(心跳来源全是 127.0.0.1,
+    管理页显示不出占用方)。所以现在无论访问控制开没开都补(见 GatewayHandler.handle)。
 
     行尾的校验标记由 ``proxy_token()`` 生成;为空时退回 6 字段的旧格式。
     """
@@ -472,16 +472,22 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             return
         address = self.client_address[0] if self.client_address else ""
         if classify(first[0]) == "web":
-            prefix = b""
-            if self.server.access.enabled():
-                # 访问控制开启时才补 PROXY 头(见 proxy_header 的说明):
-                # 关闭时这条路径与旧版逐字节一致。
-                try:
-                    local = client.getsockname()
-                except OSError:
-                    local = None
-                source_port = self.client_address[1] if len(self.client_address) > 1 else 0
-                prefix = proxy_header(address, source_port, local, self.server.proxy_secret)
+            # **总是**补 PROXY 头,不再只在访问控制开启时才补。
+            #
+            # 以前只在开启访问控制时补,理由是"关闭时默认路径逐字节不变"。但那样一来
+            # web.py 看到的心跳来源全是 127.0.0.1,服务端就分不清谁在用哪台设备:
+            # clients.json 里所有客户端的 address 都一样,管理页显示不出占用方,
+            # 客户端拿到的 holder_id 是空串 → 把"别人占着"看成"空闲",点连接才撞上
+            # Device busy。关掉访问密码(允许任何来源连)恰恰是最需要看清占用的场景。
+            #
+            # 安全性没有变化:web.py 只认行尾带 USBIP_PROXY_SECRET 派生标记的行,
+            # 不匹配就一个字节都不消费、按直连处理;秘密为空时退回 6 段旧格式。
+            try:
+                local = client.getsockname()
+            except OSError:
+                local = None
+            source_port = self.client_address[1] if len(self.client_address) > 1 else 0
+            prefix = proxy_header(address, source_port, local, self.server.proxy_secret)
             bridge(client, self.server.upstream_host, self.server.web_port, first, prefix)
             return
         # USB/IP 分支:授权表存在时,只有授权过且未过期的来源 IP 能连到 usbipd。

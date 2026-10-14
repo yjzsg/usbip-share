@@ -98,12 +98,23 @@ print("[1] 首字节分流")
 payload = b"\x11\x01\x00\x00ping"
 check("0x11(USB/IP 版本)走 usbipd", roundtrip(port, payload) == b"USB:" + payload,
       repr(roundtrip(port, payload)[:16]))
+def web_roundtrip(port, payload):
+    """HTTP 分支的往返。
+
+    网关现在**总是**先补一行 PROXY(把真实来源 IP 告诉 web.py,否则服务端分不清
+    谁在用哪台设备),再原样转发请求。所以这里剥掉 `WEB:` 与 PROXY 行,只断言
+    请求本身逐字节不变。
+    """
+    data = roundtrip(port, payload)
+    assert data.startswith(b"WEB:PROXY "), repr(data[:32])
+    return data.split(b"\r\n", 1)[1]
+
 payload = b"GET /api/devices HTTP/1.1\r\n\r\n"
-check("GET 走管理接口", roundtrip(port, payload) == b"WEB:" + payload,
-      repr(roundtrip(port, payload)[:16]))
+check("GET 走管理接口（PROXY 行之后请求原样保留）", web_roundtrip(port, payload) == payload,
+      repr(roundtrip(port, payload)[:32]))
 payload = b"POST /api/login HTTP/1.1\r\n\r\n"
-check("POST 走管理接口", roundtrip(port, payload) == b"WEB:" + payload,
-      repr(roundtrip(port, payload)[:16]))
+check("POST 走管理接口（PROXY 行之后请求原样保留）", web_roundtrip(port, payload) == payload,
+      repr(roundtrip(port, payload)[:32]))
 
 print(f"[2] 空闲 {IDLE_SECONDS:g}s 的 USB/IP 长会话不能被拆断")
 with socket.create_connection(("127.0.0.1", port), timeout=30) as sock:

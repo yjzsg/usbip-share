@@ -270,6 +270,66 @@ check("整条消息 40 字节", len(import_message("1-8.2")) == 40, str(len(impo
 check("busid 从第 8 字节开始",
       import_message("1-8.2")[8:14] == b"1-8.2\0", repr(import_message("1-8.2")[8:14]))
 
+print("[H] 关闭访问控制时也要补 PROXY 头（否则服务端分不清谁在用哪台设备）")
+# 用一个真的 loopback 连接跑一遍 GatewayHandler 的 web 分支，断言 usbipd/web 上游
+# 收到的第一段就是 PROXY 行 —— 访问控制关闭（授权表不存在）时同样如此。
+probe_listener = socket.socket()
+probe_listener.bind(("127.0.0.1", 0))
+probe_listener.listen(1)
+probe_port = probe_listener.getsockname()[1]
+seen = {}
+
+def accept_probe():
+    conn, _ = probe_listener.accept()
+    conn.settimeout(2)
+    data = bytearray()
+    try:
+        while b"GET /api/devices" not in data:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+            seen["data"] = bytes(data)
+    except OSError:
+        pass
+    seen["data"] = bytes(data)
+    conn.close()
+
+threading.Thread(target=accept_probe, daemon=True).start()
+
+# 授权表不存在 = 访问控制关闭。
+gateway_instance = gateway.Gateway.__new__(gateway.Gateway)
+gateway_instance.upstream_host = "127.0.0.1"
+gateway_instance.web_port = probe_port
+gateway_instance.usbip_port = probe_port
+gateway_instance.access = gateway.AccessGate(Path(temp.name) / "no-such-access.json")
+gateway_instance.proxy_secret = "probe-secret"
+gateway_instance.sessions = gateway.SessionRegistry(None)
+check("前置：访问控制确实是关闭的", not gateway_instance.access.enabled())
+
+handler = gateway.GatewayHandler.__new__(gateway.GatewayHandler)
+client_end, server_end = socket.socketpair()
+handler.request = server_end
+handler.client_address = ("192.168.1.99", 43210)
+handler.server = gateway_instance
+client_end.sendall(b"GET /api/devices HTTP/1.1\r\nHost: x\r\n\r\n")
+threading.Thread(target=handler.handle, daemon=True).start()
+
+deadline = time.time() + 5
+while time.time() < deadline and not seen.get("data"):
+    time.sleep(0.05)
+payload = seen.get("data") or b""
+check("访问控制关闭时仍然补了 PROXY 头", payload.startswith(b"PROXY TCP4 192.168.1.99 "), repr(payload[:60]))
+check("带上了校验标记（7 段）",
+      len(payload.split(b"\r\n", 1)[0].split(b" ")) == 7, repr(payload.split(b"\r\n", 1)[0]))
+check("HTTP 数据原样跟在后面", b"GET /api/devices HTTP/1.1" in payload, repr(payload[-60:]))
+
+for sock in (client_end, server_end, probe_listener):
+    try:
+        sock.close()
+    except OSError:
+        pass
+
 print()
 print("总计:", sum(results), "/", len(results), "通过")
 sys.exit(0 if all(results) else 1)

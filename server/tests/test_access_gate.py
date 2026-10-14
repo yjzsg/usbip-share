@@ -17,7 +17,7 @@ USB/IP 协议没有认证字段，所以这个功能是「访问密码 + 源 IP 
   [H] 关闭访问控制：授权表文件被删除，一切恢复放行
   [I] 网关判定：放行 / 拒绝 / 无文件放行 / 过期拒绝 / mtime 缓存 / 拒绝日志节流
   [J] 网关端到端：未授权来源的 USB/IP 连接不被转发；授权后才转发；
-      访问控制开启时 HTTP 连接带上 PROXY 头（关闭时不带，默认路径逐字节不变）
+      HTTP 连接一律带上带校验标记的 PROXY 头（访问控制开不开都补）
 
     python tests/test_access_gate.py
 """
@@ -597,8 +597,9 @@ check("访问控制开启时，HTTP 连接带上带校验标记的 PROXY 头（w
 e2e_file.unlink()
 with contextlib.redirect_stdout(io.StringIO()):
     http_reply = web_roundtrip(REQUEST)
-check("访问控制关闭时，HTTP 连接逐字节不变（没有 PROXY 头）",
-      http_reply == REQUEST, repr(http_reply[:60]))
+check("访问控制关闭时同样补 PROXY 头（否则服务端分不清谁在用哪台设备）",
+      http_reply.startswith(b"PROXY TCP4 127.0.0.1 ")
+      and http_reply.endswith(REQUEST), repr(http_reply[:60]))
 
 # 真网关 + 真 web.py：网关注入的 PROXY 头必须能被 web.py 正确吃掉，
 # 而且真实 HTTP 请求（而不是裸 socket）仍然照常解析 —— 如果 web.py 没消费这行头，
