@@ -28,6 +28,10 @@ fail() {
 # 共享访问密码的授权表:web.py 写,gateway.py 读。文件存在 = 已启用访问控制。
 # USBIP_ACCESS_PASSWORD 为空(默认)时 web.py 会删掉它,网关放行一切。
 : "${USBIP_ACCESS_FILE:=/run/usbip/authorized-clients.json}"
+# 网关观测到的导入会话(它解析 OP_REQ_IMPORT 得到):gateway.py 写,web.py 读。
+# 用来补上客户端没上报的占用 —— 实测客户端心跳里的 busids 经常是空的,只靠上报
+# 会让管理页显示"没人占用"而客户端却连不上(usbipd 报 Device busy)。
+: "${USBIP_SESSION_FILE:=/run/usbip/usbip-sessions.json}"
 # PROXY 行的校验秘密:网关补的那行 PROXY v1 头本身没有认证,谁先连上 web.py 的
 # 端口谁就能声称自己是任意来源 IP(web.py 只能看到对端是回环,分不清"网关"和
 # "本机上任意进程")。两边用同一个秘密派生一个标记,web.py 只认带标记的行。
@@ -233,6 +237,7 @@ if [ "$USBIP_WEB_ENABLED" = "true" ] || [ "$USBIP_WEB_ENABLED" = "1" ]; then
     USBIP_PORT="$USBIP_PORT" \
     USBIP_MANAGED_FILE="$USBIP_MANAGED_FILE" \
     USBIP_ACCESS_FILE="$USBIP_ACCESS_FILE" \
+    USBIP_SESSION_FILE="$USBIP_SESSION_FILE" \
     python3 /opt/usbip-share/web.py --host "$USBIP_WEB_HOST" --port "$USBIP_WEB_PORT" &
     WEB_PID=$!
     sleep 1
@@ -246,9 +251,10 @@ USBIP_PORT="$USBIP_PORT" \
 USBIP_INNER_USBIPD_PORT="$USBIP_INNER_USBIPD_PORT" \
 USBIP_WEB_PORT="$USBIP_WEB_PORT" \
 USBIP_ACCESS_FILE="$USBIP_ACCESS_FILE" \
+USBIP_SESSION_FILE="$USBIP_SESSION_FILE" \
     python3 /opt/usbip-share/gateway.py --host "$USBIP_GATEWAY_HOST" --port "$USBIP_PORT" \
         --usbip-port "$USBIP_INNER_USBIPD_PORT" --web-port "$USBIP_WEB_PORT" \
-        --access-file "$USBIP_ACCESS_FILE" &
+        --access-file "$USBIP_ACCESS_FILE" --session-file "$USBIP_SESSION_FILE" &
 GATEWAY_PID=$!
 sleep 1
 kill -0 "$GATEWAY_PID" 2>/dev/null || fail "single-port gateway did not start"

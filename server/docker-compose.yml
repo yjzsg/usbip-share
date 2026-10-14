@@ -37,6 +37,9 @@ services:
       USBIP_ACCESS_TTL_SECONDS: ${USBIP_ACCESS_TTL_SECONDS:-43200}
       # 授权表路径:web.py 写、gateway.py 读。文件存在 = 访问控制开启。
       USBIP_ACCESS_FILE: ${USBIP_ACCESS_FILE:-/run/usbip/authorized-clients.json}
+      # 网关观测到的导入会话（解析 OP_REQ_IMPORT）：gateway.py 写、web.py 读。
+      # 补上客户端没上报的占用，管理页才显示得出真实持有方。
+      USBIP_SESSION_FILE: ${USBIP_SESSION_FILE:-/run/usbip/usbip-sessions.json}
       # Listen address of the single external port (USB/IP + management UI).
       USBIP_GATEWAY_HOST: ${USBIP_GATEWAY_HOST:-0.0.0.0}
       USBIP_METADATA_FILE: ${USBIP_METADATA_FILE:-/etc/usbip/device-metadata.json}

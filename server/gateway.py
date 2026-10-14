@@ -21,11 +21,26 @@ import json
 import os
 import socket
 import socketserver
+import struct
+import tempfile
 import threading
 import time
 
 
 DEFAULT_ACCESS_FILE = "/run/usbip/authorized-clients.json"
+# 网关观测到的「来源 IP → 正在导入的 busid」。web.py 读它来显示真实占用。
+DEFAULT_SESSION_FILE = "/run/usbip/usbip-sessions.json"
+# USB/IP 协议:所有字段大端。op_common = version(2) + code(2) + status(4)。
+USBIP_VERSION = 0x0111
+USBIP_HEADER_SIZE = 8
+OP_REQ_IMPORT = 0x8003
+# struct usbip_usb_device 里 path[256] 之后紧跟 busid[32](NUL 结尾)。
+USBIP_IMPORT_BUSID_OFFSET = USBIP_HEADER_SIZE + 256
+USBIP_BUSID_SIZE = 32
+# 解析 busid 至少需要这么多字节;不够就继续等,绝不为观测而阻塞转发。
+USBIP_IMPORT_MIN_BYTES = USBIP_IMPORT_BUSID_OFFSET + USBIP_BUSID_SIZE
+# 只在这个长度内嗅探;超过就放弃,免得把长连接的流量缓存进内存。
+USBIP_SNIFF_MAX_BYTES = 4096
 # 同一个 IP 被拒的日志最多这么久打一条:客户端被拦后会不停重试,不能刷屏。
 DENY_LOG_INTERVAL_SECONDS = 60.0
 # 拒绝日志表的上限,防止有人拿大量伪造源地址把内存撑大。
@@ -43,6 +58,98 @@ ACCESS_RELOAD_INTERVAL_SECONDS = 1.0
 
 _DENY_LOG_LOCK = threading.Lock()
 _DENY_LOGGED: dict[str, float] = {}
+
+
+def parse_import_head(head: bytes) -> tuple[str, str]:
+    """客户端发来的字节流开头是不是 OP_REQ_IMPORT?是的话把 busid 取出来。
+
+    返回 (state, busid):
+
+      * ``"pending"`` —— 字节还不够,继续等(调用方照常把已收到的数据转发出去);
+      * ``"import"``  —— 确认是导入请求,busid 已取出;
+      * ``"other"``   —— 不是导入请求(OP_REQ_DEVLIST、URB 数据等),放弃嗅探。
+
+    正常流程里 OP_REQ_IMPORT 一定是这条连接上的第一条消息(客户端先另开一条连接
+    发 OP_REQ_DEVLIST 拿列表,再连过来导入),所以只解析开头就够。
+    """
+    if len(head) < USBIP_HEADER_SIZE:
+        return "pending", ""
+    version, code, _status = struct.unpack_from(">HHI", head, 0)
+    if version != USBIP_VERSION or code != OP_REQ_IMPORT:
+        return "other", ""
+    if len(head) < USBIP_IMPORT_MIN_BYTES:
+        return "pending", ""
+    raw = head[USBIP_IMPORT_BUSID_OFFSET:USBIP_IMPORT_MIN_BYTES]
+    return "import", raw.split(b"\0", 1)[0].decode("ascii", "replace").strip()
+
+
+class SessionRegistry:
+    """网关观测到的「哪个来源 IP 正在导入哪台设备」。
+
+    为什么要网关自己看:客户端的 ``busids`` 上报不可靠 —— 真机实测两个客户端心跳里
+    一直是空的,于是服务端完全不知道谁在占用,管理页显示"没人用",而客户端想连一台
+    已被旧会话占着的设备时只会收到 usbipd 的 ``Device busy (already exported)``,
+    两边状态对不上。网关就在这条连接上中继,解析 OP_REQ_IMPORT 得到的是硬事实,
+    不依赖客户端配合。
+
+    写盘用 mkstemp + os.replace,读侧永远看到完整 JSON。
+    """
+
+    def __init__(self, path: str | os.PathLike[str] | None) -> None:
+        self._path = str(path) if path else ""
+        self._lock = threading.Lock()
+        self._sessions: dict[int, dict] = {}
+        self._next_token = 1
+        if self._path:
+            self._flush_locked()
+
+    def open_session(self) -> int:
+        with self._lock:
+            token = self._next_token
+            self._next_token += 1
+        return token
+
+    def record_import(self, token: int, busid: str, client_ip: str, client_port: int) -> None:
+        if not busid:
+            return
+        with self._lock:
+            self._sessions[token] = {
+                "busid": busid,
+                "clientIp": client_ip,
+                "clientPort": client_port,
+                "startedAt": int(time.time()),
+            }
+            self._flush_locked()
+        print(f"[usbip-share-gateway] import observed: {client_ip} -> {busid}", flush=True)
+
+    def close_session(self, token: int) -> None:
+        with self._lock:
+            entry = self._sessions.pop(token, None)
+            if entry is not None:
+                self._flush_locked()
+        if entry is not None:
+            print(
+                f"[usbip-share-gateway] import ended: {entry['clientIp']} -> {entry['busid']}",
+                flush=True,
+            )
+
+    def _flush_locked(self) -> None:
+        if not self._path:
+            return
+        payload = {"version": 1, "sessions": list(self._sessions.values())}
+        try:
+            directory = os.path.dirname(self._path) or "."
+            os.makedirs(directory, exist_ok=True)
+            handle_fd, temp_path = tempfile.mkstemp(dir=directory, prefix=".usbip-sessions-")
+            with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+            os.replace(temp_path, self._path)
+        except OSError as exc:
+            print(
+                f"[usbip-share-gateway] WARNING: cannot write session file "
+                f"{self._path}: {exc}",
+                flush=True,
+            )
 
 
 def env_int(name: str, default: int) -> int:
@@ -251,12 +358,52 @@ def relay(src: socket.socket, dst: socket.socket) -> None:
             pass
 
 
+def relay_client_usbip(src: socket.socket, dst: socket.socket, registry: SessionRegistry,
+                       token: int, client_ip: str, client_port: int,
+                       initial: bytes = b"") -> None:
+    """客户端 -> usbipd 方向的转发,顺便嗅探开头的 OP_REQ_IMPORT。
+
+    数据一字不改地转发;嗅探只在连接开头最多 USBIP_SNIFF_MAX_BYTES 字节内进行,
+    收不够就边等边转发 —— 绝不能因为观测而阻塞转发或缓存长连接的流量。
+
+    ``initial`` 是 bridge() 已经消费掉的首字节:分流时按首字节分类必须先读掉一个,
+    不把它补回来就会从消息的第二个字节开始解析,永远认不出 OP_REQ_IMPORT。
+    """
+    head = bytearray(initial)
+    decided = False
+    try:
+        while True:
+            data = src.recv(65536)
+            if not data:
+                break
+            if not decided:
+                head += data
+                state, busid = parse_import_head(bytes(head))
+                if state == "import":
+                    decided = True
+                    registry.record_import(token, busid, client_ip, client_port)
+                elif state == "other" or len(head) >= USBIP_SNIFF_MAX_BYTES:
+                    decided = True
+            dst.sendall(data)
+    except OSError:
+        pass
+    finally:
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
 def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first: bytes,
-           prefix: bytes = b"") -> None:
+           prefix: bytes = b"", registry: SessionRegistry | None = None,
+           client_address: tuple = ("", 0)) -> None:
     """把已消费首字节的连接接到 upstream,再双向转发。
 
     ``prefix`` 是在转发客户端数据之前先写给 upstream 的固定前缀(目前只有
     HTTP 分支用的 PROXY v1 头);USB/IP 分支始终为空,数据流逐字节不变。
+
+    ``registry`` 非空时(只有 USB/IP 分支会传),在客户端->usbipd 方向顺带解析
+    OP_REQ_IMPORT,把"谁在导入哪台设备"记下来。
     """
     up = None
     try:
@@ -276,12 +423,23 @@ def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first:
             client.close()
         return
 
-    t1 = threading.Thread(target=relay, args=(client, up), daemon=True)
+    token = None
+    if registry is None:
+        t1 = threading.Thread(target=relay, args=(client, up), daemon=True)
+    else:
+        token = registry.open_session()
+        t1 = threading.Thread(
+            target=relay_client_usbip,
+            args=(client, up, registry, token, client_address[0], client_address[1], first),
+            daemon=True,
+        )
     t2 = threading.Thread(target=relay, args=(up, client), daemon=True)
     t1.start()
     t2.start()
     t1.join()
     t2.join()
+    if registry is not None and token is not None:
+        registry.close_session(token)
     try:
         up.close()
     except OSError:
@@ -333,7 +491,8 @@ class GatewayHandler(socketserver.BaseRequestHandler):
             except OSError:
                 pass
             return
-        bridge(client, self.server.upstream_host, self.server.usbip_port, first)
+        bridge(client, self.server.upstream_host, self.server.usbip_port, first,
+               registry=self.server.sessions, client_address=self.client_address)
 
 
 class Gateway(socketserver.ThreadingTCPServer):
@@ -342,13 +501,16 @@ class Gateway(socketserver.ThreadingTCPServer):
 
     def __init__(self, addr, upstream_host: str, usbip_port: int, web_port: int,
                  access_file: str = DEFAULT_ACCESS_FILE,
-                 proxy_secret_value: str | None = None) -> None:
+                 proxy_secret_value: str | None = None,
+                 session_file: str | None = DEFAULT_SESSION_FILE) -> None:
         self.upstream_host = upstream_host
         self.usbip_port = usbip_port
         self.web_port = web_port
         # 显式传入优先(测试用),否则读环境变量。取一次即可:进程运行期间不会变。
         self.proxy_secret = proxy_secret() if proxy_secret_value is None else proxy_secret_value
         self.access = AccessGate(access_file)
+        # 传 None 表示不写会话表(单测里用不到文件)。
+        self.sessions = SessionRegistry(session_file)
         super().__init__(addr, GatewayHandler)
 
 
@@ -361,6 +523,8 @@ def main() -> None:
     parser.add_argument("--web-port", type=int, default=env_int("USBIP_WEB_PORT", 8080))
     parser.add_argument("--access-file", default=os.environ.get("USBIP_ACCESS_FILE", DEFAULT_ACCESS_FILE),
                         help="authorized-clients.json written by web.py; missing file = no access control")
+    parser.add_argument("--session-file", default=os.environ.get("USBIP_SESSION_FILE", DEFAULT_SESSION_FILE),
+                        help="where to publish observed OP_REQ_IMPORT sessions for web.py; empty = disabled")
     args = parser.parse_args()
 
     if not 1 <= args.port <= 65535:

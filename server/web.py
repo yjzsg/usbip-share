@@ -38,6 +38,10 @@ QUEUE_FILE = Path(os.environ.get("USBIP_QUEUE_FILE", "/run/usbip/queue.json"))
 # that client surfaces it and clears the slot. Persisted across restarts so a
 # transport hiccup does not lose the trigger.
 NOTIFY_FILE = Path(os.environ.get("USBIP_NOTIFY_FILE", "/run/usbip/queue-notify.json"))
+# 网关观测到的导入会话(它解析 OP_REQ_IMPORT 得到的硬事实)。客户端心跳里的 busids
+# 实测经常是空的,只靠客户端上报会让管理页显示"没人占用",而客户端实际连不上——
+# 两边状态对不上。文件由 gateway.py 写,这里只读;不存在 = 没启用,行为不变。
+SESSION_FILE = Path(os.environ.get("USBIP_SESSION_FILE", "/run/usbip/usbip-sessions.json"))
 # 共享访问密码(访问控制)。空/未设 = 关闭访问控制,行为与旧版完全一致(默认)。
 # 非空 = 客户端必须先用密码调 POST /api/access/authorize 换取"源 IP 授权",
 # 之后它发起的 USB/IP 数据连接才会被 gateway.py 放行(USB/IP 协议本身没有认证,
@@ -1865,20 +1869,76 @@ def remove_client_record(client_id: str) -> bool:
     return True
 
 
-def connection_info(busid: str) -> list[dict[str, object]]:
+def read_observed_sessions() -> list[dict[str, object]]:
+    """网关观测到的「来源 IP 正在导入哪台设备」。
+
+    这是硬事实:gateway.py 在中继时解析 USB/IP 的 OP_REQ_IMPORT 得到,不依赖
+    客户端上报。文件缺失/损坏一律当成"没有观测数据",行为与引入该功能前一致。
+    """
+    try:
+        raw = SESSION_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return []
+    sessions = payload.get("sessions") if isinstance(payload, dict) else None
+    if not isinstance(sessions, list):
+        return []
     result = []
-    for client in read_clients():
+    for item in sessions:
+        if not isinstance(item, dict):
+            continue
+        busid = item.get("busid")
+        if isinstance(busid, str) and busid:
+            result.append(item)
+    return result
+
+
+def connection_info(busid: str) -> list[dict[str, object]]:
+    clients = read_clients()
+    by_address: dict[str, dict] = {}
+    for client in clients:
+        address = str(client.get("address", ""))
+        if address:
+            by_address.setdefault(address, client)
+    result = []
+    claimed: set[str] = set()
+    for client in clients:
         if busid in client.get("busids", []):
+            address = str(client.get("address", ""))
+            claimed.add(address)
             result.append(
                 {
                     "clientId": client.get("clientId", ""),
                     "name": client.get("name", "未命名客户端"),
-                    "address": client.get("address", ""),
+                    "address": address,
                     "publicIp": client.get("publicIp", ""),
                     "dataPort": client.get("dataPort", configured_port()),
                     "lastSeen": client.get("lastSeen", 0),
                 }
             )
+    # 客户端没上报的会话由网关补上。同地址已经有客户端声明时不再重复列一遍。
+    for session in read_observed_sessions():
+        if session.get("busid") != busid:
+            continue
+        address = str(session.get("clientIp", ""))
+        if address and address in claimed:
+            continue
+        known = by_address.get(address)
+        result.append(
+            {
+                "clientId": str(known.get("clientId", "")) if known else "",
+                "name": str(known.get("name", "")) if known else "未上报的客户端",
+                "address": address,
+                "publicIp": str(known.get("publicIp", "")) if known else "",
+                "dataPort": configured_port(),
+                "lastSeen": int(session.get("startedAt", 0) or 0),
+                # 网关观测到的(而非客户端自己声明的),前端据此给出不同提示。
+                "observed": True,
+            }
+        )
     return result
 
 
@@ -3091,6 +3151,23 @@ def force_release_allowed(busid: str, stale_address: str) -> tuple[bool, str]:
     return False, f"held by another peer ({', '.join(sorted(addresses)) or 'unknown'})"
 
 
+def watchdog_release_grace_seconds() -> float:
+    """客户端静默多久之后，watchdog 才可以强制释放它的设备。
+
+    `USBIP_KICK_IDLE_SECONDS` 是操作者能改的那个旋钮（应用设置里的
+    「客户端失联多久后自动释放其设备」），**0 表示不自动释放**。
+    冗余窗口（HEARTBEAT_SAFE_GAP_SECONDS + MISSED_RUN_THRESHOLD 个 watchdog 周期）
+    是下限，避免把值设得很小时变得过于敏感。
+
+    注意：这个函数存在之前，watchdog 用的是写死的冗余窗口，操作者的设置
+    只影响列表过滤和页面显示 —— 设成 180 或 0 也照样在约 65 秒后摘设备。
+    """
+    if KICK_IDLE_SECONDS <= 0:
+        return 0.0
+    redundancy = HEARTBEAT_SAFE_GAP_SECONDS + MISSED_RUN_THRESHOLD * WATCHDOG_INTERVAL_SECONDS
+    return float(max(KICK_IDLE_SECONDS, redundancy))
+
+
 def watchdog_sweep() -> None:
     """One watchdog pass: force-release devices of clients that went silent.
 
@@ -3101,8 +3178,12 @@ def watchdog_sweep() -> None:
     cycles with no fresh heartbeat before anything is released. Even then the
     release only happens when force_release_allowed() says the device is not
     demonstrably held by somebody else.
+
+    释放时机由 watchdog_release_grace_seconds() 决定，它把操作者在应用设置里
+    改的 USBIP_KICK_IDLE_SECONDS 也算了进来（0 = 永不自动释放）。
     """
     log_prefix = "[usbip-share-watchdog]"
+    grace = watchdog_release_grace_seconds()
     records = read_client_records()
     now = time.time()
     live_ids: set[str] = set()
@@ -3135,6 +3216,19 @@ def watchdog_sweep() -> None:
                 f"busids={','.join(busids) or '-'})",
                 flush=True,
             )
+            continue
+        # 冗余窗口已经走完，但还要看操作者设的宽限期：
+        #   grace <= 0  表示「不自动释放」，永远不 kick；
+        #   gap < grace 表示还在宽限期内（例如把释放时间设成 10 分钟）。
+        # 这一档只提示、不动作，且每分钟最多一条，避免每个 watchdog 周期刷屏。
+        if grace <= 0 or gap < grace:
+            if missed == MISSED_RUN_THRESHOLD or missed % 6 == 0:
+                limit = "不自动释放" if grace <= 0 else f"宽限期 {grace:.0f}s"
+                print(
+                    f"{log_prefix} client={client_id} silent for {gap:.0f}s, "
+                    f"within grace ({limit}), holding",
+                    flush=True,
+                )
             continue
         # Threshold hit: the client has missed MISSED_RUN_THRESHOLD
         # consecutive watchdog cycles. Drop its record so the UI stops showing

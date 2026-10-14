@@ -108,6 +108,9 @@ USBIP_MANAGED_FILE=${USBIP_MANAGED_FILE:-/data/managed-busids}
 # 共享访问密码的授权表：web.py 写、单端口网关读。放在 @appdata 里，
 # 但 web.py 启动时总会先写一张空表，所以重启/换密码都会清空所有授权。
 USBIP_ACCESS_FILE=${USBIP_ACCESS_FILE:-/data/authorized-clients.json}
+# 网关观测到的导入会话（解析 OP_REQ_IMPORT）：网关写、web.py 读。
+# 用来补上客户端没上报的占用——实测客户端心跳里的 busids 经常是空的。
+USBIP_SESSION_FILE=${USBIP_SESSION_FILE:-/data/usbip-sessions.json}
 
 # 某个端口在宿主上是否可用（用 0.0.0.0 试绑，比只试回环严格）。
 usbshare_port_free() {
@@ -141,4 +144,4 @@ PY
 export USBIP_PORT USBIP_GATEWAY_HOST USBIP_INNER_USBIPD_PORT USBIP_WEB_PORT \
     USBIP_WEB_ENABLED USBIP_WEB_HOST USBIP_AUTH_FILE USBIP_INITIAL_PASSWORD_FILE \
     USBIP_METADATA_FILE USBIP_CLIENTS_FILE USBIP_QUEUE_FILE USBIP_NOTIFY_FILE \
-    USBIP_PIDFILE USBIP_MANAGED_FILE USBIP_ACCESS_FILE USBSHARE_PORTS_FILE
+    USBIP_PIDFILE USBIP_MANAGED_FILE USBIP_ACCESS_FILE USBIP_SESSION_FILE USBSHARE_PORTS_FILE
