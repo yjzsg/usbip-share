@@ -1,0 +1,158 @@
+﻿///////////////////////////////////////////////////////////////////////////
+// C++ code generated with wxFormBuilder (version 4.2.1-ddd6fee7)
+// http://www.wxformbuilder.org/
+//
+// PLEASE DO *NOT* EDIT THIS FILE!
+///////////////////////////////////////////////////////////////////////////
+
+#pragma once
+
+#include <wx/artprov.h>
+#include <wx/xrc/xmlres.h>
+#include <wx/intl.h>
+#include <wx/statusbr.h>
+#include <wx/gdicmn.h>
+#include <wx/font.h>
+#include <wx/colour.h>
+#include <wx/settings.h>
+#include <wx/string.h>
+#include <wx/bitmap.h>
+#include <wx/image.h>
+#include <wx/icon.h>
+#include <wx/menu.h>
+#include <wx/aui/aui.h>
+#include <wx/aui/auibar.h>
+#include <wx/stattext.h>
+#include <wx/combobox.h>
+#include <wx/spinctrl.h>
+#include <wx/button.h>
+#include <wx/treelist.h>
+#include <wx/frame.h>
+
+///////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////
+/// Class Frame
+///////////////////////////////////////////////////////////////////////////////
+class Frame : public wxFrame
+{
+	private:
+
+	protected:
+		enum
+		{
+			ID_EDIT_NOTES = 6000,
+			ID_FLIP_AUTO,
+			ID_FLIP_RECEIVE_MODE,
+			ID_EDIT_SERIAL,
+			ID_EDIT_GEN_SERIAL,
+			ID_ATTACH,
+			ID_ATTACH_ONCE,
+			ID_ATTACH_STOP,
+			ID_ATTACH_STOP_ALL,
+			ID_TOGGLE_LOG_WINDOW,
+			ID_AUTO_CONNECT = 6010,
+			ID_MGMT_ENABLE = 6011,
+			ID_AUTO_START = 6012,
+			ID_LOCAL_NAME = 6013,
+			ID_REMOVE_SERVER = 6014,
+			/*
+			 * 这两个原本用 wxID_ANY。「偏好设置」子菜单会按 ID 分派
+			 * (见 MainFrame::configure_workspace_ui),没有稳定 ID 就无法
+			 * 在那里显式绑定,点击只能依赖菜单链的事件传播 —— 而搬到子菜单后
+			 * 那条链路并不可靠。因此给它们固定 ID。
+			 */
+			ID_START_IN_TRAY = 6015,
+			ID_CLOSE_TO_TRAY = 6016,
+		};
+
+		wxStatusBar* m_statusBar;
+		wxMenuBar* m_menubar;
+		wxMenu* m_menu_file;
+		wxMenu* m_menu_edit;
+		wxMenu* m_menu_view;
+		wxMenu* m_menu_columns;
+		wxMenu* m_view_appearance;
+		wxMenu* m_menu_devices;
+		wxMenu* m_menu_log;
+		wxMenu* m_menu_help;
+		wxAuiToolBar* m_auiToolBar;
+		wxAuiToolBarItem* m_tool_reload;
+		wxAuiToolBarItem* m_tool_attach;
+		wxAuiToolBarItem* m_tool_attach_stop;
+		wxAuiToolBarItem* m_tool_attach_stop_all;
+		wxAuiToolBarItem* m_tool_detach;
+		wxAuiToolBarItem* m_tool_detach_all;
+		wxAuiToolBarItem* m_tool_load;
+		wxAuiToolBarItem* m_tool_save;
+		wxAuiToolBar* m_auiToolBarAdd;
+		wxStaticText* m_staticTextServer;
+		wxComboBox* m_comboBoxServer;
+		wxStaticText* m_staticTextPort;
+		wxSpinCtrl* m_spinCtrlPort;
+		wxButton* m_button_add;
+		wxTreeListCtrl* m_treeListCtrl;
+
+		// Virtual event handlers, override them in your derived class
+		virtual void on_close( wxCloseEvent& event ) = 0;
+		virtual void on_frame_mouse_wheel( wxMouseEvent& event ) = 0;
+		virtual void on_load( wxCommandEvent& event ) = 0;
+		virtual void on_save( wxCommandEvent& event ) = 0;
+		virtual void on_save_selected( wxCommandEvent& event ) = 0;
+		virtual void on_has_selected_devices_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_start_in_tray( wxCommandEvent& event ) = 0;
+		virtual void on_start_in_tray_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_close_to_tray( wxCommandEvent& event ) = 0;
+		virtual void on_close_to_tray_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_exit( wxCommandEvent& event ) = 0;
+		virtual void on_select_all( wxCommandEvent& event ) = 0;
+		virtual void on_has_devices_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_copy_rows( wxCommandEvent& event ) = 0;
+		virtual void on_has_any_selected_devices_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_edit_notes( wxCommandEvent& event ) = 0;
+		virtual void on_edit_device_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_flip_auto( wxCommandEvent& event ) = 0;
+		virtual void on_flip_receive_mode( wxCommandEvent& event ) = 0;
+		virtual void on_edit_serial( wxCommandEvent& event ) = 0;
+		virtual void on_edit_gen_serial( wxCommandEvent& event ) = 0;
+		virtual void on_view_column( wxCommandEvent& event ) = 0;
+		virtual void on_view_column_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_view_appearance( wxCommandEvent& event ) = 0;
+		virtual void on_view_zebra( wxCommandEvent& event ) = 0;
+		virtual void on_view_zebra_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_view_labels( wxCommandEvent& event ) = 0;
+		virtual void on_view_labels_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_view_font_increase( wxCommandEvent& event ) = 0;
+		virtual void on_view_font_decrease( wxCommandEvent& event ) = 0;
+		virtual void on_view_font_default( wxCommandEvent& event ) = 0;
+		virtual void on_view_reset( wxCommandEvent& event ) = 0;
+		virtual void on_reload( wxCommandEvent& event ) = 0;
+		virtual void add_exported_devices( wxCommandEvent& event ) = 0;
+		virtual void on_attach( wxCommandEvent& event ) = 0;
+		virtual void on_attach_once( wxCommandEvent& event ) = 0;
+		virtual void on_attach_stop( wxCommandEvent& event ) = 0;
+		virtual void on_attach_stop_all( wxCommandEvent& event ) = 0;
+		virtual void on_detach( wxCommandEvent& event ) = 0;
+		virtual void on_detach_all( wxCommandEvent& event ) = 0;
+		virtual void on_remove_server( wxCommandEvent& event ) = 0;
+		virtual void on_log_show( wxCommandEvent& event ) = 0;
+		virtual void on_log_show_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_log_verbose( wxCommandEvent& event ) = 0;
+		virtual void on_log_verbose_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_log_library( wxCommandEvent& event ) = 0;
+		virtual void on_log_library_update_ui( wxUpdateUIEvent& event ) = 0;
+		virtual void on_help_about( wxCommandEvent& event ) = 0;
+		virtual void on_help_about_lib( wxCommandEvent& event ) = 0;
+		virtual void on_item_activated( wxTreeListEvent& event ) = 0;
+		virtual void on_item_context_menu( wxTreeListEvent& event ) = 0;
+
+
+	public:
+
+		Frame( wxWindow* parent, wxWindowID id = wxID_ANY, const wxString& title = wxEmptyString, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 1200,600 ), long style = wxDEFAULT_FRAME_STYLE|wxTAB_TRAVERSAL );
+		wxAuiManager m_mgr;
+
+		~Frame();
+
+};
+

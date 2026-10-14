@@ -1,0 +1,73 @@
+/*
+ * Copyright (c) 2021-2026 Vadym Hrynchyshyn <vadimgrn@gmail.com>
+ */
+
+#pragma once
+
+#include <set>
+#include <string>
+
+#include <libusbip/remote.h>
+
+namespace usbip
+{
+
+class UsbIds;
+const UsbIds& get_ids();
+
+enum class receive_mode;
+const char *to_string(_In_ receive_mode mode) noexcept;
+
+std::string GetLastErrorMsg(unsigned long msg_id = ~0UL);
+
+struct global_args
+{
+        std::string tcp_port = get_tcp_port();
+};
+inline struct global_args global_args;
+
+using command_t = bool(void*);
+
+struct attach_args
+{
+        // --remote
+        std::string remote;
+        std::string busid;
+        std::string serial;
+        bool terse{};
+        bool stop{};
+        bool once{};
+        receive_mode recv_mode{}; // receive_mode::zero_copy;
+
+        // --persistent,--stashed
+        bool persistent{};
+
+        // --stop-all
+        bool stop_all{};
+};
+command_t cmd_attach;
+
+struct detach_args
+{
+        int port{};
+};
+command_t cmd_detach;
+
+struct list_args
+{
+        // --remote
+        std::string remote;
+
+        // --persistent,--stashed
+        bool persistent{};
+};
+command_t cmd_list;
+
+struct port_args
+{
+        std::set<int> ports;
+        bool persistent{};
+};
+command_t cmd_port;
+
+} // namespace usbip

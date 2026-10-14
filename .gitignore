@@ -22,3 +22,9 @@ _workspace/
 .idea/
 .DS_Store
 Thumbs.db
+
+# client/src 是上游 usbip-win2 的完整源码快照。上游把这些也纳入版本管理，
+# 但本仓库的 bin/ 规则（匹配任意层级）和上游自带的 whlk/ 规则会把它们挡掉，
+# 所以显式放行；其余仍按上游 .gitignore 处理。
+!client/src/bin/
+!client/src/whlk/

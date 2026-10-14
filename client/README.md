@@ -9,6 +9,7 @@
 | 文件 | 说明 |
 |---|---|
 | `LICENSE.txt` | 上游原始许可（BSD 2-Clause），必须随源码与二进制保留 |
+| `src/` | **完整源码快照**（319 个文件 / 8.2 MB），包含本分支相对上游的全部改动，可直接构建；来源与版本见 `src/SNAPSHOT.md` |
 | `changes.patch` | 本分支相对基线提交（`74f5a7fa`）的**完整差异**，共 150 个文件、约 9.2k 行 |
 
 ## 改了什么
@@ -48,20 +49,39 @@
 
 ## 构建
 
-上游项目用 Visual Studio + vcpkg 构建，先准备环境：
+**方式一：直接用 `src/`（推荐）**
 
-1. 安装 Visual Studio 2022（含"使用 C++ 的桌面开发"与 WDK，用于驱动部分）；
-2. 克隆上游仓库并检出适配 v0.9.8.0 的基线：
+`src/` 是完整源码，本分支的改动都已经在里面，不需要再打补丁。唯一缺的是
+`vcpkg` —— 它是上游的 git submodule，**出于体积考虑没有随仓库分发**
+（上游 `.gitmodules` 里标了 `ignore = all`，完整检出有 14 GB）。
 
-   ```sh
-   git clone https://github.com/vadimgrn/usbip-win2.git
-   cd usbip-win2
-   git checkout 74f5a7fa        # changes.patch 的基线
-   git apply /path/to/changes.patch
-   ```
+按上游 `README.md` 执行 `bootstrap.bat` 准备依赖，或者手动补上：
 
-3. 按上游 `README.md` 的说明执行 `bootstrap.bat` 拉取 vcpkg 依赖（本项目锁定 wxWidgets 3.3.3），
-   然后用 `usbip_win2.slnx` 构建。
+```sh
+cd client/src
+git clone https://github.com/microsoft/vcpkg.git
+```
+
+然后在 Visual Studio 里打开 `usbip_win2.slnx` 构建。只构建客户端（不含驱动）时：
+
+```bat
+MSBuild.exe userspace\wusbip\wusbip.vcxproj /p:Configuration=Release /p:Platform=x64 ^
+  /p:PlatformToolset=v143 /m
+```
+
+> 工程文件里写的是 `PlatformToolset=v145`，只装了 VS2022 v143 工具集时**必须**用
+> `/p:PlatformToolset=v143` 覆盖，否则报找不到工具集。
+
+**方式二：从上游基线 + 补丁**
+
+想把改动和上游分开看时：
+
+```sh
+git clone https://github.com/vadimgrn/usbip-win2.git
+cd usbip-win2
+git checkout 74f5a7fa        # changes.patch 的基线
+git apply /path/to/changes.patch
+```
 
 补丁是文本 diff，可直接查看每处改动；如果它无法干净应用（上游基线变动），
 可以按文件路径手工比对——补丁里每个文件的开头都有完整路径。

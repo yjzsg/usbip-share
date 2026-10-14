@@ -1,0 +1,23 @@
+*~
+*.aps
+*.vcxproj.user
+*.idb
+*.pdb
+*.sarif
+*.DVL.XML
+/.vs
+x64
+ARM64
+packages
+vcpkg_installed
+/bin/usbip-*.*
+/userspace/resources/messages.h
+/userspace/resources/messages.rc
+/userspace/resources/MSG*.bin
+
+# local-only backups / debug dumps
+*.orig
+*.prewx
+*.orig2
+drivers/ude/wpp-disabled/
+whlk/
