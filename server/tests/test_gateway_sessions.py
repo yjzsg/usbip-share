@@ -32,14 +32,14 @@ def check(name, cond, detail=""):
 
 
 def import_message(busid: str) -> bytes:
-    """构造一条 OP_REQ_IMPORT（8 字节头 + 312 字节 usbip_usb_device）。"""
-    busid_bytes = busid.encode("ascii")[:31].ljust(32, b"\0")
-    payload = b"/sys/devices/pci0000:00/usb1/1-8/1-8.2".ljust(256, b"\0") + busid_bytes
-    payload += struct.pack(">III", 1, 10, 12)          # busnum/devnum/speed
-    payload += struct.pack(">HHH", 0x1241, 0xE001, 0x0110)
-    payload += bytes([0, 0, 0, 1, 1, 1])
-    assert len(payload) == 312, len(payload)
-    return struct.pack(">HHI", gateway.USBIP_VERSION, gateway.OP_REQ_IMPORT, 0) + payload
+    """构造一条 OP_REQ_IMPORT。
+
+    请求体是 `op_import_request { char busid[32]; }`,不是 usbip_usb_device ——
+    后者只出现在 OP_REP_IMPORT 回复里。所以整条消息 = 8 字节头 + 32 字节 busid。
+    """
+    busid_bytes = busid.encode("utf-8")[:31].ljust(gateway.USBIP_BUSID_SIZE, b"\0")
+    assert len(busid_bytes) == 32
+    return struct.pack(">HHI", gateway.USBIP_VERSION, gateway.OP_REQ_IMPORT, 0) + busid_bytes
 
 
 print("[A] parse_import_head 的三种状态")
@@ -68,9 +68,13 @@ state, _ = gateway.parse_import_head(struct.pack(">HHI", 0x9999, gateway.OP_REQ_
 check("版本号不对 → other", state == "other", state)
 
 print("[B] busid 的 NUL 结尾与边界")
-short = struct.pack(">HHI", gateway.USBIP_VERSION, gateway.OP_REQ_IMPORT, 0) + b"\0" * 256 + b"1-8\0" + b"\0" * 28 + b"\0" * 24
+short = struct.pack(">HHI", gateway.USBIP_VERSION, gateway.OP_REQ_IMPORT, 0) + b"1-8\0" + b"\0" * 28
 state, busid = gateway.parse_import_head(short)
 check("按第一个 NUL 截断", state == "import" and busid == "1-8", f"{state}/{busid}")
+full32 = struct.pack(">HHI", gateway.USBIP_VERSION, gateway.OP_REQ_IMPORT, 0) + b"1-8.2".ljust(32, b"\0")
+state, busid = gateway.parse_import_head(full32 + b"\xde\xad\xbe\xef" * 50)
+check("后面跟着 URB 数据也不影响（只看固定 32 字节）",
+      state == "import" and busid == "1-8.2", f"{state}/{busid}")
 
 print("[C] SessionRegistry 写盘与清理")
 temp = tempfile.TemporaryDirectory()
@@ -118,17 +122,19 @@ collected = {}
 
 def accept_once():
     conn, _ = upstream_listener.accept()
-    data = b""
     conn.settimeout(5)
+    data = bytearray()
     try:
         while True:
             chunk = conn.recv(65536)
             if not chunk:
                 break
             data += chunk
+            # 收到就更新，不要等 EOF —— 否则要跟这里的 5 秒超时赛跑。
+            collected["data"] = bytes(data)
     except OSError:
         pass
-    collected["data"] = data
+    collected["data"] = bytes(data)
     conn.close()
 
 threading.Thread(target=accept_once, daemon=True).start()
@@ -218,6 +224,51 @@ finally:
     web.QUEUE_FILE = old_queue_file
     web.NOTIFY_FILE = old_notify_file
     temp.cleanup()
+
+print("[F] main() 必须把 --session-file 传给 Gateway（曾经漏传过）")
+probe = Path(temp.name) / "probe-sessions.json"
+captured = {}
+real_tcp_init = gateway.socketserver.ThreadingTCPServer.__init__
+real_serve = gateway.Gateway.serve_forever
+real_close = gateway.Gateway.server_close
+
+def fake_tcp_init(self, addr, handler):      # 不真的监听端口
+    captured["addr"] = addr
+
+def fake_serve(self, poll_interval=0.5):     # 不进事件循环
+    captured["session_path"] = self.sessions._path
+    captured["access_path"] = self.access.path
+
+def fake_close(self):                        # 没真的建 socket，别去 close
+    pass
+
+gateway.socketserver.ThreadingTCPServer.__init__ = fake_tcp_init
+gateway.Gateway.serve_forever = fake_serve
+gateway.Gateway.server_close = fake_close
+saved_argv = sys.argv
+sys.argv = ["gateway.py", "--port", "15555",
+            "--access-file", "/tmp/probe-access.json",
+            "--session-file", str(probe)]
+try:
+    gateway.main()
+finally:
+    sys.argv = saved_argv
+    gateway.socketserver.ThreadingTCPServer.__init__ = real_tcp_init
+    gateway.Gateway.serve_forever = real_serve
+    gateway.Gateway.server_close = real_close
+
+check("--session-file 真的传到了 SessionRegistry",
+      captured.get("session_path") == str(probe), str(captured.get("session_path")))
+check("--access-file 仍然照常传下去",
+      captured.get("access_path") == "/tmp/probe-access.json", str(captured.get("access_path")))
+check("会话表文件已在指定路径建好", probe.exists(), str(probe))
+
+print("[G] 协议布局钉死：请求体是 op_import_request（8 字节头 + 32 字节 busid）")
+check("常量偏移就是 8（不是 usbip_usb_device 里的 256+8）",
+      gateway.USBIP_IMPORT_BUSID_OFFSET == 8, str(gateway.USBIP_IMPORT_BUSID_OFFSET))
+check("整条消息 40 字节", len(import_message("1-8.2")) == 40, str(len(import_message("1-8.2"))))
+check("busid 从第 8 字节开始",
+      import_message("1-8.2")[8:14] == b"1-8.2\0", repr(import_message("1-8.2")[8:14]))
 
 print()
 print("总计:", sum(results), "/", len(results), "通过")

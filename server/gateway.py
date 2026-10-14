@@ -34,8 +34,10 @@ DEFAULT_SESSION_FILE = "/run/usbip/usbip-sessions.json"
 USBIP_VERSION = 0x0111
 USBIP_HEADER_SIZE = 8
 OP_REQ_IMPORT = 0x8003
-# struct usbip_usb_device 里 path[256] 之后紧跟 busid[32](NUL 结尾)。
-USBIP_IMPORT_BUSID_OFFSET = USBIP_HEADER_SIZE + 256
+# OP_REQ_IMPORT 的请求体是 `struct op_import_request { char busid[BUS_ID_SIZE]; }` ——
+# 紧跟 8 字节 op_common 头就是 32 字节 busid。注意这里**不是** usbip_usb_device:
+# 那个结构体只出现在 OP_REP_IMPORT 回复里(客户端 include/usbip/proto_op.h)。
+USBIP_IMPORT_BUSID_OFFSET = USBIP_HEADER_SIZE
 USBIP_BUSID_SIZE = 32
 # 解析 busid 至少需要这么多字节;不够就继续等,绝不为观测而阻塞转发。
 USBIP_IMPORT_MIN_BYTES = USBIP_IMPORT_BUSID_OFFSET + USBIP_BUSID_SIZE
@@ -533,7 +535,7 @@ def main() -> None:
         raise SystemExit("upstream port out of range")
 
     srv = Gateway((args.host, args.port), args.upstream_host, args.usbip_port, args.web_port,
-                  args.access_file)
+                  args.access_file, session_file=args.session_file)
     print(
         f"[usbip-share-gateway] single port {args.host}:{args.port} -> "
         f"usbipd {args.upstream_host}:{args.usbip_port} | web {args.upstream_host}:{args.web_port}",
