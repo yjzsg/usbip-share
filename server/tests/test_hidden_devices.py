@@ -71,6 +71,11 @@ def fake_run_usbip(*args):
 
 web.run_usbip = fake_run_usbip
 web.is_shared = lambda busid: busid in shared
+# 这台测试用的假设备 busid 是 2-7（Realtek 网卡）。在真实飞牛上 2-7 可能
+# 恰好就是那块 USB 网卡，device_network_interfaces() 会读到真的 sysfs 并让
+# 共享请求被 USB 网卡保护拦下 —— 那是保护在起作用，不是被测逻辑出错。
+# 这里钉死为"没有网络接口"，让结果只取决于本文件构造的数据。
+web.device_network_interfaces = lambda busid: []
 web.load_auth()
 
 httpd = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)

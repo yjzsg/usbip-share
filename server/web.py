@@ -61,7 +61,7 @@ SYSFS_USB_DEVICES = Path("/sys/bus/usb/devices")
 USB_INTERFACE_DIR_GLOB = "{busid}:*"
 MAX_QUEUE_PER_BUSID = 16
 MAX_NOTIFY_PER_CLIENT = 32
-KICK_IDLE_SECONDS = int(os.environ.get("USBIP_KICK_IDLE_SECONDS", "60") or 60)
+KICK_IDLE_SECONDS = int(os.environ.get("USBIP_KICK_IDLE_SECONDS", "180") or 180)
 CLIENT_TTL_SECONDS = max(45, KICK_IDLE_SECONDS + 15)
 WATCHDOG_INTERVAL_SECONDS = 10
 # A managed client heartbeats every HEARTBEAT_INTERVAL_SECONDS in the happy path;

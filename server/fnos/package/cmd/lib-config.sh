@@ -169,7 +169,7 @@ usbshare_apply_wizard() {
     cur_load=$(usbshare_current USBIP_LOAD_MODULE true) || return 1
     cur_unbind=$(usbshare_current USBIP_UNBIND_ON_EXIT false) || return 1
     cur_restore=$(usbshare_current USBIP_RESTORE_SHARED true) || return 1
-    cur_kick=$(usbshare_current USBIP_KICK_IDLE_SECONDS 60) || return 1
+    cur_kick=$(usbshare_current USBIP_KICK_IDLE_SECONDS 180) || return 1
     cur_access_password=$(usbshare_current USBIP_ACCESS_PASSWORD '') || return 1
 
     new_port=$(usbshare_pick_port "${w_port}" "${cur_port}")

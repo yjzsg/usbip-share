@@ -143,7 +143,7 @@
                 "type": "text",
                 "field": "kick_idle_seconds",
                 "label": "客户端失联多久后自动释放其设备（秒）",
-                "initValue": "60",
+                "initValue": "180",
                 "helpText": "Windows 客户端每 10 秒发一次心跳。填 0 表示不自动释放。",
                 "rules": [
                     {

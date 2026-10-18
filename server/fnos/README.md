@@ -64,7 +64,7 @@ admin_password=改成你自己的
 restore_shared=true
 load_module=true
 unbind_on_exit=false
-kick_idle_seconds=60
+kick_idle_seconds=180
 EOF
 
 sudo appcenter-cli install-fpk dist/usbip-share.fpk --env /tmp/wizard.env -v 1

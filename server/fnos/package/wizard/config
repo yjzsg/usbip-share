@@ -144,7 +144,7 @@
                 "type": "text",
                 "field": "kick_idle_seconds",
                 "label": "客户端失联多久后自动释放其设备（秒）",
-                "initValue": "60",
+                "initValue": "180",
                 "helpText": "填 0 表示不自动释放。",
                 "rules": [
                     {

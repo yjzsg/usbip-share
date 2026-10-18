@@ -128,7 +128,7 @@ docker compose logs --tail 30
 | `USBIP_ACCESS_FILE` | `/run/usbip/authorized-clients.json` | 授权表路径：`web.py` 写、`gateway.py` 读。**文件存在 = 访问控制开启**，删除即恢复放行 |
 | `USBIP_PROXY_SECRET` | 启动时随机生成 | 网关与 `web.py` 共享的 PROXY 校验秘密（见「网关怎么知道真实来源 IP」）。由 `entrypoint.sh` 生成并导出，正常不用手设；显式设置会覆盖生成值。**为空 = 退回旧版"只看回环"的行为并在日志里告警** |
 | `USBIP_PROXY_WAIT_SECONDS` | `2` | `web.py` 等网关那行 PROXY 头的最长时间（秒）。只作用于这一行，拿到/放弃后立刻恢复 15 秒连接超时 |
-| `USBIP_KICK_IDLE_SECONDS` | `60` | 客户端停止心跳多久后自动释放其共享设备（避免关机后僵尸占用）|
+| `USBIP_KICK_IDLE_SECONDS` | `180` | 客户端停止心跳多久后自动释放其共享设备（避免关机后僵尸占用）。客户端每 10 秒一次心跳，`180` 是为了扛住短暂抖动；填 `0` = 不自动释放 |
 | `USBIP_WATCHDOG_MISSED_RUNS` | `5` | 连续多少个 watchdog 周期无心跳才考虑释放（每周期 10s） |
 | `USBIPD_DEBUG` | `false` | 打开 usbipd 调试日志 |
 

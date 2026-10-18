@@ -330,6 +330,98 @@ for sock in (client_end, server_end, probe_listener):
     except OSError:
         pass
 
+print("[I] 客户端断开后会话必须被清掉（上游那一侧不关也不能留住）")
+# 真机踩过：客户端断开后 usbipd 不关闭自己那一侧，而 relay() 的 recv 没有超时，
+# t2 就永久阻塞 → close_session() 永远不执行 → 会话表里留下一条"幽灵占用"。
+# 1-8.2 就这样残留了 4 小时：管理页一直显示这台设备被台式占着，客户端那边早已
+# 没有这个端口。这里用一个"接受连接后既不发送也不关闭"的上游复现该场景。
+stale_path = Path(temp.name) / "stale-sessions.json"
+stale_registry = gateway.SessionRegistry(stale_path)
+
+hold_listener = socket.socket()
+hold_listener.bind(("127.0.0.1", 0))
+hold_listener.listen(1)
+hold_port = hold_listener.getsockname()[1]
+held = {}
+
+
+def accept_and_hold():
+    conn, _ = hold_listener.accept()
+    held["conn"] = conn          # 故意不 recv、不 close：模拟 usbipd 那一侧一直开着
+
+
+threading.Thread(target=accept_and_hold, daemon=True).start()
+
+stale_gateway = gateway.Gateway.__new__(gateway.Gateway)
+stale_gateway.upstream_host = "127.0.0.1"
+stale_gateway.web_port = hold_port
+stale_gateway.usbip_port = hold_port
+stale_gateway.access = gateway.AccessGate(Path(temp.name) / "no-such-access.json")
+stale_gateway.proxy_secret = ""
+stale_gateway.sessions = stale_registry
+
+stale_handler = gateway.GatewayHandler.__new__(gateway.GatewayHandler)
+stale_client, stale_server = socket.socketpair()
+stale_handler.request = stale_server
+stale_handler.client_address = ("192.168.123.129", 20647)
+stale_handler.server = stale_gateway
+threading.Thread(target=stale_handler.handle, daemon=True).start()
+
+stale_client.sendall(import_message("1-8.2"))
+
+
+def read_stale():
+    try:
+        return json.loads(stale_path.read_text(encoding="utf-8"))["sessions"]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+deadline = time.time() + 5
+sessions_now = []
+while time.time() < deadline:
+    sessions_now = read_stale()
+    if sessions_now:
+        break
+    time.sleep(0.05)
+check("前置：会话已记进表里",
+      len(sessions_now) == 1 and sessions_now[0]["busid"] == "1-8.2", str(sessions_now))
+
+stale_client.close()             # 客户端断开，上游那一侧仍然开着
+
+deadline = time.time() + 8
+while time.time() < deadline:
+    sessions_now = read_stale()
+    if not sessions_now:
+        break
+    time.sleep(0.05)
+check("客户端断开后会话被清掉（上游仍开着）", sessions_now == [], str(sessions_now))
+check("上游连接确实还开着 —— 证明不是靠对端关闭才清掉的",
+      "conn" in held and held["conn"].fileno() != -1, str(list(held)))
+
+print("[J] keepalive 收紧到分钟级（回收对端消失的幽灵连接）")
+ka = socket.socket()
+gateway.enable_keepalive(ka)
+check("SO_KEEPALIVE 已开启",
+      ka.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE) == 1)
+if hasattr(socket, "TCP_KEEPIDLE"):
+    check("TCP_KEEPIDLE 就是配置值",
+          ka.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE) == gateway.KEEPALIVE_IDLE_SECONDS,
+          str(ka.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE)))
+    check("TCP_KEEPCNT 就是配置值",
+          ka.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT) == gateway.KEEPALIVE_PROBES,
+          str(ka.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT)))
+check("远小于系统默认的 7200 秒（两小时才回收不可接受）",
+      gateway.KEEPALIVE_IDLE_SECONDS < 7200, str(gateway.KEEPALIVE_IDLE_SECONDS))
+ka.close()
+
+for sock in (hold_listener, held.get("conn")):
+    if sock is not None:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
 print()
 print("总计:", sum(results), "/", len(results), "通过")
 sys.exit(0 if all(results) else 1)

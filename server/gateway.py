@@ -335,6 +335,36 @@ def proxy_header(address: str, source_port: int, local: object, secret: str = ""
 # 只作用于第一个字节,转发阶段两个方向都不设超时(见 bridge())。
 FIRST_BYTE_TIMEOUT_SECONDS = 10.0
 
+# 会话收尾的排水等待:任一方向结束后,再给另一方向这么多秒把残留数据吐完,超时就
+# 强制关闭。**不能无限等** —— usbipd 在客户端断开后不一定关闭自己那一侧,而 relay()
+# 的 recv 没有超时,join() 会永久阻塞(见 bridge() 里的说明)。
+RELAY_DRAIN_SECONDS = 2.0
+
+# 对端消失(拔网线 / 断电 / 进程被强杀)时 TCP 收不到 FIN,连接会一直停在 ESTAB。
+# 系统默认 tcp_keepalive_time=7200s,意味着这类"幽灵连接"能挂两小时,期间会话表
+# 一直显示这台设备被占用。按连接单独收紧到 ~105 秒(60 + 3×15)回收。
+KEEPALIVE_IDLE_SECONDS = 60
+KEEPALIVE_INTERVAL_SECONDS = 15
+KEEPALIVE_PROBES = 4
+
+
+def enable_keepalive(sock: socket.socket) -> None:
+    """把连接级 keepalive 收紧到分钟级,用来回收"对端已经消失"的会话。
+
+    正常空闲的 USB/IP 会话不受影响:keepalive 探针由对端内核自动应答,只要那台
+    主机还在就不会被判定成断开 —— 所以这不是"空闲超时",不会误断闲置设备。
+    """
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, KEEPALIVE_IDLE_SECONDS)
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, KEEPALIVE_INTERVAL_SECONDS)
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, KEEPALIVE_PROBES)
+    except OSError:
+        pass
+
 
 def classify(first_byte: int) -> str:
     """A-Z 开头视为 HTTP 方法,其余(含 0x11 usbip version)视为 USB/IP。"""
@@ -426,35 +456,62 @@ def bridge(client: socket.socket, upstream_host: str, upstream_port: int, first:
         return
 
     token = None
+    finished = threading.Event()
+
+    def _run(target, *args) -> None:
+        try:
+            target(*args)
+        finally:
+            finished.set()
+
     if registry is None:
-        t1 = threading.Thread(target=relay, args=(client, up), daemon=True)
+        t1 = threading.Thread(target=_run, args=(relay, client, up), daemon=True)
     else:
         token = registry.open_session()
         t1 = threading.Thread(
-            target=relay_client_usbip,
-            args=(client, up, registry, token, client_address[0], client_address[1], first),
+            target=_run,
+            args=(relay_client_usbip, client, up, registry, token,
+                  client_address[0], client_address[1], first),
             daemon=True,
         )
-    t2 = threading.Thread(target=relay, args=(up, client), daemon=True)
+    t2 = threading.Thread(target=_run, args=(relay, up, client), daemon=True)
     t1.start()
     t2.start()
-    t1.join()
-    t2.join()
-    if registry is not None and token is not None:
+    if registry is None or token is None:
+        # HTTP 分支没有会话表要清理,保持原来的"两个方向都结束"语义:客户端
+        # 半关闭(SHUT_WR)之后响应可能还要继续发,不能抢跑。
+        t1.join()
+        t2.join()
+    else:
+        # USB/IP 分支:**任一方向结束就说明这条会话已经结束**,不能等两个方向都返回。
+        #
+        # 真机踩过:客户端断开后 usbipd 不关闭自己那一侧,t2 就永久阻塞在 recv 上
+        # (relay() 没有超时),close_session() 永远不执行,会话表里留下一条"幽灵
+        # 占用" —— 1-8.2 就这样残留了 4 小时,管理页一直显示这台设备被台式占着,
+        # 而客户端那边早已没有这个端口。这类残留让管理页和客户端各说一套,正是最
+        # 难排查的那种不一致。
+        finished.wait()
+        t1.join(timeout=RELAY_DRAIN_SECONDS)
+        t2.join(timeout=RELAY_DRAIN_SECONDS)
         registry.close_session(token)
-    try:
-        up.close()
-    except OSError:
-        pass
-    try:
-        client.close()
-    except OSError:
-        pass
+    for sock in (up, client):
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    for sock in (up, client):
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 class GatewayHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         client: socket.socket = self.request
+        # 收紧 keepalive:对端拔网线/断电时不会有 FIN,否则这条连接会挂满系统默认的
+        # 2 小时才被回收,期间会话表一直说这台设备被占用(见 enable_keepalive)。
+        enable_keepalive(client)
         # 只给"等第一个字节"设超时,拿到之后必须清掉:否则转发线程的 recv 会在
         # 空闲 10s 后抛超时,USB/IP 长会话又会被拆断(见 bridge() 里的同类注释)。
         try:

@@ -45,8 +45,8 @@ services:
       USBIP_METADATA_FILE: ${USBIP_METADATA_FILE:-/etc/usbip/device-metadata.json}
       USBIP_CLIENTS_FILE: ${USBIP_CLIENTS_FILE:-/run/usbip/clients.json}
       # Release a shared device when its client stops heartbeating this long.
-      # Default 60s; our Chinese client heartbeats every 10s.
-      USBIP_KICK_IDLE_SECONDS: ${USBIP_KICK_IDLE_SECONDS:-60}
+      # Default 180s; our Chinese client heartbeats every 10s.
+      USBIP_KICK_IDLE_SECONDS: ${USBIP_KICK_IDLE_SECONDS:-180}
       # A client is declared gone only after this many *consecutive* watchdog
       # cycles (~50s at the defaults) without a heartbeat, so one dropped
       # heartbeat cannot force-release a device that is still in use.
