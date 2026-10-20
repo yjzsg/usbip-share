@@ -126,12 +126,27 @@ default_route_present() {
 
 # 本轮真正 bind 成功的 busid;回滚只针对本轮动作,不会去动别人。
 ROUND_BOUND=""
+# 本轮想绑但不在总线上的 busid(拔掉了、换了端口)。跳过而不是 fatal:
+# 一个拔掉的狗不能让整个服务端起不来。
+ROUND_MISSING=""
 
 bind_one() {
     busid="$1"
     case "$busid" in
-        ''|*[!A-Za-z0-9_.:-]*) fail "invalid USB bus ID: $busid" ;;
+        ''|*[!A-Za-z0-9_.:-]*)
+            # 一个坏条目不该让整个服务端起不来。
+            log "WARNING: skipping invalid USB bus ID: $busid"
+            return 0
+            ;;
     esac
+
+    # 设备不在总线上(拔掉了、换了端口、还没枚举完):跳过,但保留在 managed 列表里,
+    # 插回后重启应用即可自动恢复共享。
+    if [ ! -e "/sys/bus/usb/devices/$busid" ]; then
+        log "WARNING: $busid is not on the bus (unplugged or moved); skipping. Replug it and restart the app to restore sharing."
+        ROUND_MISSING="$ROUND_MISSING $busid"
+        return 0
+    fi
 
     if netdev_guard_enabled && exports_network_interface "$busid"; then
         # return 0: 一个坏条目不能让整个容器起不来,但也绝不 bind。
@@ -147,7 +162,12 @@ bind_one() {
     fi
 
     log "binding USB device: $busid"
-    usbip bind -b "$busid" || fail "cannot bind $busid; verify the bus ID and that no other driver owns it"
+    # 绑不上也可能只是被别的驱动占着(usbhid 等)。警告后继续,其余设备照常共享,
+    # 不要因为一台设备把整个服务拖进重启循环。
+    if ! usbip bind -b "$busid"; then
+        log "WARNING: cannot bind $busid (another driver may own it); skipping, other devices are unaffected"
+        return 0
+    fi
     ROUND_BOUND="$ROUND_BOUND $busid"
     remember_managed "$busid"
 }
@@ -259,6 +279,9 @@ GATEWAY_PID=$!
 sleep 1
 kill -0 "$GATEWAY_PID" 2>/dev/null || fail "single-port gateway did not start"
 
+if [ -n "$ROUND_MISSING" ]; then
+    log "WARNING: not on the bus, not shared:$ROUND_MISSING (replug and restart the app to restore)"
+fi
 if [ -n "$ROUND_BOUND" ]; then
     log "USB/IP server is ready; initially exported bus IDs:$ROUND_BOUND"
 elif [ -n "$USBIP_BUSIDS" ]; then
